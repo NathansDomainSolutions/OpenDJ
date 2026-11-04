@@ -83,7 +83,7 @@ const TARGET_ENV_RATE = 200; // onset envelope frames per second (approx.)
 /** Bumped when the grid maths change, so the app knows which stored grids to re-analyse. */
 export const ANALYSIS_VERSION = 2;
 /** Bumped when key detection changes, so stored keys (and chroma) are found again. */
-export const KEY_VERSION = 3;
+export const KEY_VERSION = 4;
 
 // Seconds added to a measured onset so a kick's attack sample is the beat (frames are
 // timestamped at their centre; the log-energy rise still peaks a little after the attack).
@@ -253,10 +253,10 @@ function meanOf(x, from, to) {
 }
 
 /** Envelopes and the analysis window shared by every tempo step, or null if too short. */
-function analysisContext(mono, sampleRate) {
+function analysisContext(mono, sampleRate, onset) {
   const duration = mono.length / sampleRate;
   if (duration < 8) return null;
-  const onset = onsetEnvelope(mono, sampleRate);
+  onset ??= onsetEnvelope(mono, sampleRate);
   const R = onset.rate;
   const env = smooth(onset.env, 2);
   const bass = smooth(onset.bass, 1);
@@ -619,8 +619,8 @@ const octavePrior = (bpm) => Math.exp(-0.5 * Math.log2(bpm / 120) ** 2);
  * { step: 8, d: ms[] } (see driftResult), and alts the next two non-octave tempo levels
  * (×4/3, ×3/4, ×5/4, ×4/5) for the user to pick when ours is wrong.
  */
-export function detectTempo(mono, sampleRate, { minBpm = 70, maxBpm = 190 } = {}) {
-  const c = analysisContext(mono, sampleRate);
+export function detectTempo(mono, sampleRate, { minBpm = 70, maxBpm = 190, onsets } = {}) {
+  const c = analysisContext(mono, sampleRate, onsets);
   if (!c) return null;
   const { peaks, score } = tempoScores(c);
   if (!peaks.length) return null;
@@ -894,6 +894,7 @@ export function chromagram(mono, sampleRate, { maxFrames = 600 } = {}) {
     if (d < 0.4) frameChroma[((nearest % 12) + 12) % 12] += peaks[i + 1] * Math.cos((d / 0.4) * (Math.PI / 2)) ** 2;
   }
   flush();
+  chroma.tuning = tuning; // Keep the measured detune for matching records that aren't tuned to A440.
   return chroma;
 }
 
@@ -945,7 +946,7 @@ export function detectKey(mono, sampleRate) {
   const confidence = Math.max(0, Math.min(1, (best.r - (runnerUp?.r ?? 0)) * 4));
   let total = 0;
   for (const v of chroma) total += v;
-  return { key: best.key, confidence, scores: scores.slice(0, 4), chroma: Array.from(chroma, (v) => Math.round((v / total) * 1e4) / 1e4) };
+  return { key: best.key, confidence, tuning: chroma.tuning, scores: scores.slice(0, 4), chroma: Array.from(chroma, (v) => Math.round((v / total) * 1e4) / 1e4) };
 }
 
 /** Chroma moved up by s semitones. */
@@ -959,7 +960,8 @@ const rotateChroma = (ch, s) => Array.from({ length: 12 }, (_, i) => ch[(((i - s
  * Returns { shift, fit, fitNow } (fit = chroma correlation, -1…1) or null.
  */
 export function bestKeyShift(mine, theirs, theirOffset = 0, myOffset = 0) {
-  if (!mine?.length || !theirs?.length) return null;
+  const valid = (ch) => ch?.length === 12 && Array.from(ch).every((v) => Number.isFinite(v) && v >= 0) && Math.max(...ch) > Math.min(...ch);
+  if (!valid(mine) || !valid(theirs) || !Number.isFinite(theirOffset) || !Number.isFinite(myOffset)) return null;
   const whole = Math.round(theirOffset);
   const heard = rotateChroma(theirs, whole);
   let best = null;
@@ -1066,8 +1068,8 @@ export function beatPhase(position, bpm, offset) {
 }
 
 /** Everything the app stores for a track, in one call (what analysis-worker.js runs). */
-export function analyzeTrack(mono, sampleRate) {
-  const tempo = detectTempo(mono, sampleRate);
+export function analyzeTrack(mono, sampleRate, { onsets, key = true } = {}) {
+  const tempo = detectTempo(mono, sampleRate, { onsets });
   const meter = tempo ? detectMeter(mono, sampleRate, tempo.bpm, tempo.offset) : null;
-  return { tempo, meter, key: detectKey(mono, sampleRate) };
+  return { tempo, meter, key: key ? detectKey(mono, sampleRate) : null };
 }

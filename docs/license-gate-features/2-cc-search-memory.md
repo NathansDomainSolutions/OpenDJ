@@ -58,7 +58,7 @@ Using the fake yt-dlp:
 - [ ] Remove that track from the library, **restart the app**, then paste
       `https://www.youtube.com/watch?v=cc1`. It downloads without searching again. (This failed in the
       original build.)
-- [ ] `cc-verified.json` exists in `%APPDATA%\Commons DJ NoGate` and contains `cc1` and `cc2`.
+- [ ] `cc-verified.json` exists in `%APPDATA%\OscarDJ` and contains `cc1` and `cc2`.
 - [ ] `ccX` and `nolic` are still skipped (until feature 3 is back).
 
 With real YouTube:

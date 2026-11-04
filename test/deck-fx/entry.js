@@ -5,17 +5,17 @@ const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 
 const outDir = path.resolve(process.argv[process.argv.length - 1]);
-const TOOLS = process.env.CDJ_FX_TEST_DIR;
+const TOOLS = process.env.CDJ_FX_TEST_DIR || __dirname;
 
 app.whenReady().then(() => {
   const win = new BrowserWindow({ show: false, webPreferences: { backgroundThrottling: false } });
-  const worklet = pathToFileURL(path.join(app.getAppPath(), 'src', 'renderer', 'deck-fx.worklet.js')).href;
+  const worklet = pathToFileURL(path.resolve(__dirname, '../../src/renderer/deck-fx.worklet.js')).href;
   win.webContents.on('console-message', (e) => {
     const msg = e.message;
     if (msg.startsWith('FXTEST ')) {
       fs.mkdirSync(outDir, { recursive: true });
       fs.writeFileSync(path.join(outDir, 'fx-report.json'), msg.slice(7));
-      app.exit(0);
+      app.exit(JSON.parse(msg.slice(7)).every(result => result.ok === true || result.ok === null) ? 0 : 1);
     }
   });
   setTimeout(() => {

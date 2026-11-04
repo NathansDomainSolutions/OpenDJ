@@ -1,6 +1,6 @@
 // Marketing screenshots of the real app, into website/img/.
 // Run from the repo root:  npx electron website/tools/capture.cjs --background
-// Uses a throwaway userData dir: the real library (%APPDATA%/Commons DJ NoGate) is only read.
+// Uses a throwaway userData dir: the real library (%APPDATA%/OscarDJ, or the pre-rename Commons DJ NoGate folder) is only read.
 const { app } = require('electron');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const out = path.join(__dirname, '..', 'img'); fs.mkdirSync(out, { recursive: true });
@@ -10,7 +10,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cdj-shots-'));
 app.setPath('userData', tmp);
 app.commandLine.appendSwitch('disable-audio-output');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
-const real = path.join(process.env.APPDATA, 'Commons DJ NoGate');
+const real = ['OscarDJ', 'Commons DJ NoGate'].map((n) => path.join(process.env.APPDATA, n)).find((d) => fs.existsSync(path.join(d, 'library.json')));
 const lib = JSON.parse(fs.readFileSync(path.join(real, 'library.json'), 'utf8'));
 const vids = new Set(fs.readdirSync(path.join(real, 'videos')).filter((f) => f.endsWith('.mp4')).map((f) => f.slice(0, -4)));
 // Decks: A/B close in tempo for the synced hero shot, C/D for 4-deck mode. All have cached videos.

@@ -4,6 +4,7 @@
 // (key shift / key lock / stems) before its EQ.
 
 import SignalsmithStretch from './lib/SignalsmithStretch.mjs';
+import { bestKeyShift } from './analysis.js';
 
 const dbToGain = (db) => Math.pow(10, db / 20);
 
@@ -31,7 +32,7 @@ export class Mixer {
     this.master.connect(this.limiter);
     this.sfx = this.ctx.createGain(); // SFX pads, on top of the decks but under the limiter
     this.sfx.gain.value = 0.8;
-    this.sfx.connect(this.limiter);
+    this.sfx.connect(this.master);
     this.limiter.connect(this.masterAnalyser);
     this.masterAnalyser.connect(this.ctx.destination);
 
@@ -212,10 +213,9 @@ export class Deck {
   }
 
   sendScratchBuffer() {
-    // shortcut: copies the decoded track into the worklet (2× its RAM), use a SharedArrayBuffer if memory gets tight.
-    const channels = [];
-    for (let c = 0; c < this.buffer.numberOfChannels; c++) channels.push(this.buffer.getChannelData(c).slice());
+    const channels = this.scratchChannels || Array.from({ length: this.buffer.numberOfChannels }, (_, c) => this.buffer.getChannelData(c).slice());
     this.scratchNode.port.postMessage({ type: 'load', channels }, channels.map((a) => a.buffer));
+    this.scratchChannels = null;
   }
 
   /** Hand on the record: playback stops, the scratch voice follows scratchTo(). Returns whether it was playing. */
@@ -333,6 +333,7 @@ export class Deck {
   }
 
   setKeyShift(semitones) {
+    if (!Number.isFinite(semitones)) return;
     this.keyShift = Math.max(-12, Math.min(12, Math.round(semitones * 100) / 100));
     this.sendFx();
     this.emit('key');
@@ -345,17 +346,21 @@ export class Deck {
   }
 
   /**
-   * Shift this deck so it plays in the other deck's (heard) key, or its
-   * relative major/minor — same Camelot number, so they mix harmonically.
+   * Match the other deck's heard notes, including both recordings' tuning.
+   * Without chroma, use the key names and their relative major/minor.
    * Turns key lock on, so the match holds when tempo moves. Returns the shift
    * in semitones, or null if either key is unknown.
    */
   matchKeyTo(other) {
     const mine = this.track?.key;
     const theirs = other.track?.key;
-    if (mine == null || mine < 0 || theirs == null || theirs < 0) return null;
+    if (!this.track || !other.track) return null;
+    const myTuning = this.track.tuning || 0;
+    const theirOffset = other.keyOffset + (other.track.tuning || 0);
+    const fit = bestKeyShift(this.track.chroma, other.track.chroma, theirOffset, this.keyOffset + myTuning);
+    if (!fit && (mine == null || mine < 0 || theirs == null || theirs < 0)) return null;
     const relMajor = (k) => (k % 12) + (k >= 12 ? 3 : 0);
-    let s = relMajor(theirs) + other.keyOffset - relMajor(mine);
+    let s = fit ? fit.shift - myTuning : relMajor(theirs) + theirOffset - relMajor(mine) - myTuning;
     s = ((s % 12) + 12) % 12;
     if (s >= 6) s -= 12; // smallest move: −6…+6
     this.keyLock = true;
@@ -409,7 +414,8 @@ export class Deck {
   positionAt(t) {
     if (!this.playing) return this.pausedPos;
     if (t < this.startTime) return this.startPos;
-    let pos = this.startPos + (t - this.startTime) * this.speed;
+    // Integrate the speed actually sent to the sources, including during a tempo change.
+    let pos = this.startPos + (t - this.startTime) * this.appliedSpeed;
     if (this.loop && pos >= this.loop.end) {
       const len = this.loop.end - this.loop.start;
       pos = this.loop.start + ((pos - this.loop.start) % len);
@@ -432,11 +438,16 @@ export class Deck {
     return bars ? (pos - bars.downbeat) / this.beatPeriod : 0;
   }
 
-  load(buffer, track) {
+  load(buffer, track, scratchChannels = null) {
     this.stopSource();
     this.buffer = buffer;
     this.track = track;
+    this.scratchChannels = scratchChannels;
     this.playing = false;
+    this.bendFactor = 1;
+    this.scratching = false;
+    this.scratchNode?.port.postMessage({ type: 'stop' });
+    this.busyUntil = 0;
     this.pausedPos = 0;
     this.cuePoint = track.beatOffset && track.beatOffset < 2 ? track.beatOffset : 0;
     this.loop = null;
@@ -504,7 +515,7 @@ export class Deck {
 
   /** Restart the sources where the deck already is (after a routing change), without a jump. */
   restartInPlace() {
-    const when = this.ctx.currentTime + LOOKAHEAD;
+    const when = Math.max(this.startTime, this.ctx.currentTime + LOOKAHEAD);
     this.startSource(this.positionAt(when), when);
   }
 
@@ -516,7 +527,7 @@ export class Deck {
     if (!this.buffer || this.playing) return;
     this.mixer.resume();
     if (this.pausedPos >= this.duration - 0.01) this.pausedPos = 0;
-    this.startSource(at ?? this.pausedPos, when);
+    this.startSource(at >= this.duration - 0.01 ? 0 : at ?? this.pausedPos, when);
     this.playing = true;
     this.emit('state');
   }
@@ -578,6 +589,7 @@ export class Deck {
   }
 
   setRate(rate, { silent = false } = {}) {
+    if (!Number.isFinite(rate) || rate <= 0) return;
     this.rate = rate;
     this.applySpeed();
     queueMicrotask(() => this.fxChain.syncGate());
@@ -831,8 +843,11 @@ export class FxChain {
 
   /** Turn an effect on or off and/or set its amount (0..1) or the gate's rate. */
   set(name, patch) {
+    const gate = this.state.gate;
+    const resync = name === 'gate' && ((patch.on ?? gate.on) !== gate.on || (patch.div ?? gate.div) !== gate.div);
     Object.assign(this.state[name], patch);
     this.apply();
+    if (resync) this.syncGate();
   }
 
   apply() {
@@ -842,7 +857,6 @@ export class FxChain {
     const depth = gate.on ? gate.amount : 0;
     glide(this.gate.gain, 1 - depth / 2);
     glide(this.gateDepth.gain, depth / 2);
-    if (gate.on && !this.gateOsc) this.syncGate();
     const fl = flanger.on ? flanger.amount : 0;
     glide(this.flWet.gain, fl * 0.8);
     glide(this.flDry.gain, 1 - fl * 0.25); // keeps the overall level even as the mix rises
@@ -876,6 +890,7 @@ export class FxChain {
     osc.setPeriodicWave(this.gateWave);
     osc.frequency.value = d.rate / step; // steps per real second
     osc.connect(this.gateDepth);
+    osc.onended = () => osc.disconnect();
     osc.start(when);
     this.gateOsc?.stop(when); // hand over exactly on the step
     this.gateOsc = osc;

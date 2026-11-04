@@ -1,12 +1,19 @@
 // Bridge between the sandboxed UI and the main process.
 const { contextBridge, ipcRenderer, webUtils, webFrame } = require('electron');
 
+async function readAudio(url) {
+  const response = await fetch(await url);
+  if (!response.ok) throw new Error(`Could not read audio (HTTP ${response.status}).`);
+  return response.arrayBuffer();
+}
+
 contextBridge.exposeInMainWorld('cdj', {
   library: {
     list: () => ipcRenderer.invoke('library:list'),
     update: (id, patch) => ipcRenderer.invoke('library:update', id, patch),
     remove: (id, opts) => ipcRenderer.invoke('library:remove', id, opts),
-    readAudio: (id) => ipcRenderer.invoke('library:readAudio', id),
+    audioUrl: (id) => ipcRenderer.invoke('library:readAudio', id),
+    readAudio: (id) => readAudio(ipcRenderer.invoke('library:readAudio', id)),
     importDialog: () => ipcRenderer.invoke('library:importDialog'),
     importFiles: (files) =>
       ipcRenderer.invoke(
@@ -45,7 +52,8 @@ contextBridge.exposeInMainWorld('cdj', {
       return () => ipcRenderer.removeListener('stems:modelProgress', handler);
     },
     separate: (id, left, right) => ipcRenderer.invoke('stems:separate', id, left, right),
-    read: (id, name) => ipcRenderer.invoke('stems:read', id, name),
+    audioUrl: (id, name) => ipcRenderer.invoke('stems:read', id, name),
+    read: (id, name) => readAudio(ipcRenderer.invoke('stems:read', id, name)),
     onProgress: (fn) => {
       const handler = (_e, payload) => fn(payload);
       ipcRenderer.on('stems:progress', handler);

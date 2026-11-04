@@ -1,5 +1,5 @@
 // Speed check for the HT-Demucs ONNX model with onnxruntime-node.
-// Run with the app's Electron as Node: ELECTRON_RUN_AS_NODE=1 "Commons DJ NoGate.exe" bench.js <runtimeDir> <model.onnx> [cpu|dml]
+// Run with the app's Electron as Node: ELECTRON_RUN_AS_NODE=1 "OscarDJ.exe" bench.js <runtimeDir> <model.onnx> [cpu|dml]
 const path = require('node:path');
 const [runtimeDir, modelPath, provider = 'cpu'] = process.argv.slice(2);
 const ort = require(path.join(runtimeDir, 'node_modules', 'onnxruntime-node'));

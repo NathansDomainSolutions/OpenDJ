@@ -19,7 +19,7 @@ permissions:
 
 env:
   TAG: ${{ inputs.tag || github.ref_name }}
-  APP_NAME: Commons DJ NoGate
+  APP_NAME: OscarDJ
   # Same files left out as the package:win-* scripts in package.json.
   PACKAGER_IGNORE: ^/(dist|out|vendor|test|scripts|node_modules|\.github)($|/)
 
@@ -44,7 +44,7 @@ jobs:
         run: |
           node scripts/fetch-ytdlp.mjs win32 ${{ matrix.arch }}
           node scripts/vendor-ort.mjs win32 ${{ matrix.arch }}
-          npx electron-packager . "$APP_NAME" --platform=win32 --arch=${{ matrix.arch }} --out=dist --overwrite \
+          npx electron-packager . "$APP_NAME" --platform=win32 --arch=${{ matrix.arch }} --out=dist --overwrite --no-asar \
             --icon=assets/icon.ico --extra-resource=vendor/win32-${{ matrix.arch }}/bin \
             --extra-resource=vendor/win32-${{ matrix.arch }}/ort \
             --ignore="$PACKAGER_IGNORE" --prune=false
@@ -59,11 +59,11 @@ jobs:
         run: |
           version="${TAG#v}"
           cd dist
-          7z a -tzip -mx=9 "../OpenDJ-$version-win-${{ matrix.arch }}.zip" "$APP_NAME-win32-${{ matrix.arch }}"
+          7z a -tzip -mx=9 "../OscarDJ-$version-win-${{ matrix.arch }}.zip" "$APP_NAME-win32-${{ matrix.arch }}"
       - uses: actions/upload-artifact@v4
         with:
           name: win-${{ matrix.arch }}
-          path: OpenDJ-*.zip
+          path: OscarDJ-*.zip
           if-no-files-found: error
 
   mac:
@@ -88,9 +88,9 @@ jobs:
         run: |
           node scripts/fetch-ytdlp.mjs darwin arm64
           chmod +x vendor/darwin-arm64/bin/yt-dlp_macos
-          npx electron-packager . "$APP_NAME" --platform=darwin --arch=universal --out=dist --overwrite \
+          npx electron-packager . "$APP_NAME" --platform=darwin --arch=universal --out=dist --overwrite --no-asar \
             --icon=build/icon.icns --extra-resource=vendor/darwin-arm64/bin \
-            --app-bundle-id=org.opendj.commonsdj-nogate --app-category-type=public.app-category.music \
+            --app-bundle-id=org.oscardj.app --app-category-type=public.app-category.music \
             --ignore="^/(dist|out|vendor|test|scripts|node_modules|build|\.github)($|/)" --prune=false
       - name: Check bundle
         run: |
@@ -125,11 +125,11 @@ jobs:
       - name: Zip
         run: |
           version="${TAG#v}"
-          ditto -c -k --sequesterRsrc --keepParent "dist/$APP_NAME-darwin-universal/$APP_NAME.app" "OpenDJ-$version-mac-universal.zip"
+          ditto -c -k --sequesterRsrc --keepParent "dist/$APP_NAME-darwin-universal/$APP_NAME.app" "OscarDJ-$version-mac-universal.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: mac-universal
-          path: OpenDJ-*.zip
+          path: OscarDJ-*.zip
           if-no-files-found: error
 
   release:
@@ -153,24 +153,24 @@ jobs:
 
           ## Downloads
 
-          - **Windows x64** (most Windows PCs): \`OpenDJ-$version-win-x64.zip\`
-          - **Windows ARM64** (Snapdragon / Windows on ARM): \`OpenDJ-$version-win-arm64.zip\`
-          - **macOS** (Apple Silicon and Intel, universal): \`OpenDJ-$version-mac-universal.zip\`
+          - **Windows x64** (most Windows PCs): \`OscarDJ-$version-win-x64.zip\`
+          - **Windows ARM64** (Snapdragon / Windows on ARM): \`OscarDJ-$version-win-arm64.zip\`
+          - **macOS** (Apple Silicon and Intel, universal): \`OscarDJ-$version-mac-universal.zip\`
 
           AI stem models, onnxruntime and PyTorch are not included; they are optional and set up on your machine.
           DSP stems, decks, DROP, SFX and search work without them.
 
           ## Installing
 
-          **Windows:** unzip the folder somewhere you keep apps and double-click **Commons DJ NoGate.exe**.
+          **Windows:** unzip the folder somewhere you keep apps and double-click **OscarDJ.exe**.
           The app isn't code-signed, so SmartScreen warns you the first time: click **More info → Run anyway**.
 
-          **macOS:** unzip and drag **Commons DJ NoGate.app** to Applications. The app isn't signed or notarized
+          **macOS:** unzip and drag **OscarDJ.app** to Applications. The app isn't signed or notarized
           (no Apple Developer account), so the first time **right-click the app → Open → Open**. If macOS says the app
           is damaged or still won't open it, run this in Terminal:
 
           \`\`\`
-          xattr -dr com.apple.quarantine "/Applications/Commons DJ NoGate.app"
+          xattr -dr com.apple.quarantine "/Applications/OscarDJ.app"
           \`\`\`
           EOF
           } > notes.md
@@ -184,6 +184,6 @@ jobs:
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release edit "$TAG" --prerelease=false --latest --notes-file notes.md
           else
-            gh release create "$TAG" --verify-tag --latest --title "OpenDJ ${TAG#v}" --notes-file notes.md
+            gh release create "$TAG" --verify-tag --latest --title "OscarDJ ${TAG#v}" --notes-file notes.md
           fi
           gh release upload "$TAG" assets/*.zip --clobber

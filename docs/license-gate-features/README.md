@@ -1,6 +1,6 @@
 # License gate — pulled out for rework
 
-The YouTube Creative Commons check in Commons DJ is made of three features. All three are removed from
+The YouTube Creative Commons check in OscarDJ is made of three features. All three are removed from
 `CommonsDJ-nogate/`, and each one is written up here with its original code, what goes wrong, and a plan for
 putting it back. The untouched original source is still in `CommonsDJ/` for reference.
 
@@ -16,7 +16,7 @@ putting it back. The untouched original source is still in `CommonsDJ/` for refe
 - Each track stores `license: info.license || null` and `licenseCheckedBy: 'unchecked'`.
 - The library badge shows `UNCHECKED` for anything that isn't clearly CC. It no longer defaults to "CC".
   Credits lines say "license not checked" instead of "Creative Commons".
-- The app's name is **Commons DJ NoGate**, so its data lives in `%APPDATA%\Commons DJ NoGate`, separate
+- The app's name is **OscarDJ**, so its data lives in `%APPDATA%\OscarDJ`, separate
   from your real library.
 - CC **search** still uses YouTube's Creative Commons filter. Only the download check is gone.
 

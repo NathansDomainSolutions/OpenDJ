@@ -103,7 +103,7 @@ Per 7.8 s model segment, after warm-up:
 
 The test copy at `Downloads\CommonsDJ-NoGate-AI-test\Commons DJ NoGate\Commons DJ NoGate.exe` has the runtime,
 but **not the model**. To try it, copy `htdemucs_fp16weights.onnx` (it's in this session's `ai-stems/downloads/`
-folder) into `%APPDATA%\Commons DJ NoGate\models\`. That folder is shared with your normal NoGate install; the
+folder) into `%APPDATA%\OscarDJ\models\`. That folder is shared with your normal NoGate install; the
 normal install ignores the model because it has no runtime.
 
 Checklist:

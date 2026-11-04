@@ -1,4 +1,4 @@
-// Commons DJ — main process
+// OscarDJ — main process
 // Owns the window, the track library on disk, and the yt-dlp integration.
 // The renderer never touches the filesystem or spawns processes directly;
 // everything goes through the IPC handlers below.
@@ -9,12 +9,9 @@ const fs = require('node:fs');
 const fsp = fs.promises;
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
+const { pathToFileURL } = require('node:url');
 
 const AUDIO_EXTENSIONS = ['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'opus', 'webm', 'aif', 'aiff'];
-
-// YouTube's own "Creative Commons" search filter. Not used in the NoGate
-// build's search (see search-issues/3-cc-filter.md).
-const CC_SEARCH_PARAM = 'EgIwAQ%253D%253D';
 
 // NO-GATE BUILD: the license gate (license-field check, CC-search memory and
 // title-search fallback) is removed here. See license-gate-features/ for the
@@ -26,6 +23,15 @@ let library = { version: 1, tracks: [] };
 const activeDownloads = new Map();
 
 // ---------------------------------------------------------------- paths
+
+// Before the OscarDJ rename the data lived in "Commons DJ NoGate". Keep using that folder rather than
+// moving it: library.json stores absolute paths into it. Skipped when a test or tool set its own userData.
+const legacyData = path.join(app.getPath('appData'), 'Commons DJ NoGate');
+if (app.getPath('userData') === path.join(app.getPath('appData'), app.getName())
+  && !fs.existsSync(path.join(app.getPath('userData'), 'library.json'))
+  && fs.existsSync(path.join(legacyData, 'library.json'))) {
+  app.setPath('userData', legacyData);
+}
 
 function initPaths() {
   paths.root = app.getPath('userData');
@@ -41,8 +47,12 @@ function initPaths() {
 async function loadLibrary() {
   try {
     const parsed = JSON.parse(await fsp.readFile(paths.library, 'utf8'));
-    library = { version: 1, tracks: Array.isArray(parsed.tracks) ? parsed.tracks : [] };
-  } catch {
+    if (!Array.isArray(parsed?.tracks) || parsed.tracks.some((t) => !t || typeof t.id !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(t.id) || typeof t.file !== 'string' || !t.file) || new Set(parsed.tracks.map(t => t.id)).size !== parsed.tracks.length) {
+      throw new Error('The library contains invalid track data. Restore it from a backup before reopening the app.');
+    }
+    library = { version: 1, tracks: parsed.tracks };
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
     library = { version: 1, tracks: [] };
   }
 }
@@ -198,7 +208,7 @@ function pickThumb(entry) {
 const SEARCH_LIMIT = 50;
 
 // NOGATE BUILD: plain YouTube search, same query and order as typing it into
-// youtube.com. The Creative Commons filter (CC_SEARCH_PARAM) is off; see
+// youtube.com. The Creative Commons filter is off; see
 // search-issues/3-cc-filter.md. Returns the results plus details of exactly
 // what was searched and what was dropped, so the search tab can show it.
 async function searchCreativeCommons(query) {
@@ -473,10 +483,13 @@ async function downloadTrack({ url, jobId, meta = null }) {
 
 async function importLocalFiles(filePaths) {
   const added = [];
+  const existing = new Set(library.tracks.map((t) => t.file));
   for (const file of filePaths) {
+    if (typeof file !== 'string') continue;
     const ext = path.extname(file).slice(1).toLowerCase();
     if (!AUDIO_EXTENSIONS.includes(ext)) continue;
-    if (library.tracks.some((t) => t.file === file)) continue;
+    if (existing.has(file)) continue;
+    existing.add(file);
     const base = path.basename(file, path.extname(file));
     const dash = base.indexOf(' - ');
     const track = {
@@ -491,11 +504,13 @@ async function importLocalFiles(filePaths) {
       addedAt: new Date().toISOString(),
       source: { kind: 'local' },
     };
-    library.tracks.unshift(track);
-    added.push(publicTrack(track));
+    added.push(track);
   }
-  if (added.length) saveLibrary();
-  return added;
+  if (added.length) {
+    library.tracks = added.slice().reverse().concat(library.tracks);
+    saveLibrary();
+  }
+  return added.map(publicTrack);
 }
 
 // ---------------------------------------------------------------- AI stems (prototype)
@@ -573,7 +588,7 @@ function downloadStemModel() {
   return modelDownload;
 }
 
-const stemDir = (id) => path.join(paths.root, 'stems', String(id).replace(/[^a-zA-Z0-9_-]/g, ''));
+const stemDir = (id) => path.join(paths.root, 'stems', safeId(id));
 
 function cachedStems(id) {
   const dir = stemDir(id);
@@ -706,7 +721,10 @@ function separateStems(id, left, right) {
 // show it beside the readouts, following the music.
 
 const videoDir = () => path.join(paths.root, 'videos');
-const safeId = (id) => String(id).replace(/[^a-zA-Z0-9_-]/g, '');
+function safeId(id) {
+  if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(id)) throw new Error('Invalid track ID');
+  return id;
+}
 
 function cachedVideo(id) {
   try {
@@ -731,7 +749,7 @@ async function fetchVideo(id) {
     file = cachedVideo(id);
     if (!file) throw new Error('The video download finished but the file could not be found.');
   }
-  return fsp.readFile(file);
+  return pathToFileURL(file).href;
 }
 
 // ---------------------------------------------------------------- IPC
@@ -753,9 +771,8 @@ function registerIpc() {
 
   ipcMain.handle('stems:read', async (_e, id, name) => {
     const files = cachedStems(id);
-    if (!files || !files[name]) throw new Error('Stems not ready');
-    const buf = await fsp.readFile(files[name]);
-    return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    if (!files || !STEM_NAMES.includes(name)) throw new Error('Stems not ready');
+    return pathToFileURL(files[name]).href;
   });
 
   ipcMain.handle('library:list', () => library.tracks.map(publicTrack));
@@ -764,7 +781,7 @@ function registerIpc() {
     const t = findTrack(id);
     if (!t) return null;
     const allowed = ['title', 'artist', 'bpm', 'beatOffset', 'beatsPerBar', 'downbeat', 'cues', 'duration', 'key',
-      'gridVersion', 'gridSource', 'keyVersion', 'chroma', 'bpmConfidence', 'gridRms', 'variable', 'bpmAlts', 'gridPrev'];
+      'gridVersion', 'gridSource', 'keyVersion', 'chroma', 'tuning', 'bpmConfidence', 'gridRms', 'variable', 'bpmAlts', 'gridPrev'];
     for (const key of allowed) if (key in patch) t[key] = patch[key];
     saveLibrary();
     return publicTrack(t);
@@ -795,8 +812,7 @@ function registerIpc() {
   ipcMain.handle('library:readAudio', async (_e, id) => {
     const t = findTrack(id);
     if (!t) throw new Error('Track not found');
-    const buf = await fsp.readFile(t.file);
-    return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    return pathToFileURL(t.file).href;
   });
 
   ipcMain.handle('library:importDialog', async () => {
@@ -867,7 +883,7 @@ function createWindow() {
     minWidth: 1040,
     minHeight: 680,
     backgroundColor: '#0d0e10',
-    title: 'Commons DJ',
+    title: 'OscarDJ',
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -890,7 +906,13 @@ function createWindow() {
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   initPaths();
-  await loadLibrary();
+  try {
+    await loadLibrary();
+  } catch (err) {
+    dialog.showErrorBox('Unable to open your library', `Your library could not be read. It has been left untouched.\n\n${paths.library}\n\n${err.message}`);
+    app.quit();
+    return;
+  }
   registerIpc();
   createWindow();
   app.on('activate', () => {
