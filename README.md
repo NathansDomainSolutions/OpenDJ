@@ -101,11 +101,18 @@ Validation: `npm test`, `npm run test:ui`, `npm run test:load`, `npm run test:fx
 - **Search:** a **YouTube / Spotify** switch. Spotify searches the catalogue (needs a free app key) and fetches the matching YouTube upload for the audio.
 - **Space bar** pauses everything and resumes the same decks; smoother zoom, animations, and a desktop launcher (`Start OscarDJ.cmd`).
 
-## Running it (Windows on ARM)
+## Running it
 
-1. Unzip `OscarDJ-win-arm64.zip` somewhere you keep apps, such as `Documents\Apps\OscarDJ`.
+**Windows:** pick `OscarDJ-<version>-win-x64.zip` for most PCs or `OscarDJ-<version>-win-arm64.zip` for Windows on ARM.
+
+1. Unzip it somewhere you keep apps, such as `Documents\Apps\OscarDJ`.
 2. Double-click **OscarDJ.exe**.
 3. The app isn't code-signed, so Windows SmartScreen will warn you the first time. Click **More info → Run anyway**.
+
+**macOS:** unzip `OscarDJ-<version>-mac-universal.zip` (Apple Silicon and Intel) and drag **OscarDJ.app** to
+Applications. It isn't notarized, so the first time **right-click the app → Open → Open**.
+
+**Linux:** there's no native build. Run the Windows x64 version with [Wine](https://www.winehq.org/).
 
 Your library and downloads live in `%APPDATA%\OscarDJ` (the **Open download folder** button takes you there).
 

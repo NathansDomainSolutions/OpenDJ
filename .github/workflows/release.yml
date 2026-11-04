@@ -156,6 +156,7 @@ jobs:
           - **Windows x64** (most Windows PCs): \`OscarDJ-$version-win-x64.zip\`
           - **Windows ARM64** (Snapdragon / Windows on ARM): \`OscarDJ-$version-win-arm64.zip\`
           - **macOS** (Apple Silicon and Intel, universal): \`OscarDJ-$version-mac-universal.zip\`
+          - **Linux:** no native build; run the Windows x64 zip with [Wine](https://www.winehq.org/).
 
           AI stem models, onnxruntime and PyTorch are not included; they are optional and set up on your machine.
           DSP stems, decks, DROP, SFX and search work without them.

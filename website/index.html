@@ -25,12 +25,13 @@
       <div class="record a" aria-hidden="true"><span></span></div>
       <div class="center">
         <h1>OscarDJ</h1>
-        <p class="sub">Free DJ app. Windows and macOS.</p>
+        <p class="sub">Free DJ app. Windows and macOS (Linux via Wine).</p>
         <a class="btn" id="dl" href="https://github.com/oscargradisar/OpenDJ/releases/download/v0.3.8-beta/OpenDJ-0.3.8-beta-win-x64.zip" data-asset="win-x64">Download for Windows</a>
         <p class="platforms">
           <a href="https://github.com/oscargradisar/OpenDJ/releases/download/v0.3.8-beta/OpenDJ-0.3.8-beta-win-x64.zip" data-asset="win-x64">Windows</a> ·
           <a href="https://github.com/oscargradisar/OpenDJ/releases/download/v0.3.8-beta/OpenDJ-0.3.8-beta-win-arm64.zip" data-asset="win-arm64">Windows ARM</a> ·
-          <a href="https://github.com/oscargradisar/OpenDJ/releases/download/v0.3.8-beta/OpenDJ-0.3.8-beta-mac-universal.zip" data-asset="mac-universal">macOS</a>
+          <a href="https://github.com/oscargradisar/OpenDJ/releases/download/v0.3.8-beta/OpenDJ-0.3.8-beta-mac-universal.zip" data-asset="mac-universal">macOS</a> ·
+          <a href="https://www.winehq.org/" title="No native Linux build: run the Windows x64 version with Wine">Linux (Wine)</a>
         </p>
       </div>
       <div class="record b" aria-hidden="true"><span></span></div>
@@ -63,6 +64,7 @@
     // Links above are the current release; this swaps in the newest one so the site never needs editing per release.
     const dl = document.getElementById('dl');
     if (/Mac/.test(navigator.platform)) { dl.dataset.asset = 'mac-universal'; dl.textContent = 'Download for macOS'; dl.href = document.querySelector('[data-asset="mac-universal"]').href; }
+    else if (/Linux/.test(navigator.platform) && !/Android/.test(navigator.userAgent)) { delete dl.dataset.asset; dl.textContent = 'Linux: get Wine'; dl.href = 'https://www.winehq.org/'; }
     fetch('https://api.github.com/repos/oscargradisar/OpenDJ/releases/latest')
       .then(r => r.ok ? r.json() : Promise.reject())
       .then(rel => {
