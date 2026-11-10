@@ -11,6 +11,20 @@ A two-deck DJ app for your own music and Creative Commons tracks, with yt-dlp bu
 > order), with a details strip showing exactly what was searched and an **Expand** button for more room. The
 > search problems are written up in `docs/search-issues/`.
 
+## What's new (not yet released)
+
+Matching, and a simpler codebase. Everything that was there still is.
+
+- **Key Match goes for the nearest key that mixes.** It used to move a deck all the way to the other deck's key, up to 6 semitones, which sounds unnatural. Now it takes the smallest shift that lands on the same notes (same or relative key), or one step round the Camelot wheel when that saves more than a semitone: 3 semitones at most, 1.25 on average over every pair of keys (was 6 and 3). The notes the tracks actually play still have the last word, so a wrong key reading doesn't send it somewhere sour. **Shift-click Match** for the very same key.
+- **Key Match tunes, too.** Records are often 10–40 cents off concert pitch, and two tracks a quarter-tone apart clash even in the "same" key. Each track's tuning is now measured with its key, and Match takes the difference out. (Keys are read again the first time each track is loaded.)
+- **Key fit at a glance.** A dot by each deck's key: green = in key with the other deck (same or relative), a green ring = one step round the wheel, red = a clash. It follows key shift, and tempo without key lock.
+- **The library shows what mixes.** Against the deck on air, a green BPM is within 6% (also at half or double time) and a green key fits. **Match** (next to the filter) puts the best fits first, and every column heading sorts.
+- **Tempo match without the lock.** Shift-click **Sync** (or `Shift`+`C` / `Shift`+`.`) takes the other deck's tempo once, at ½×, 1× or 2×, and leaves the beat-matching to you.
+- **Beat-match meter.** Next to the bar counter, a dot shows how far a deck's beats are from the other deck's, in milliseconds: middle and green = together. It works with Sync off, for matching by hand, and shows Sync holding when it's on.
+- **Fixed:** the key readout didn't follow a tempo change made by Sync (without key lock a new tempo is a new pitch), and double-clicking the crossfader left the 4-deck puck behind.
+- **Simpler code.** The 2,500-line `app.js` is now a 50-line entry point and one module per area in `src/renderer/ui/`; the matching maths lives in `src/renderer/match.js` with its own tests. Repeated code (saved settings, segmented buttons, link handling) is shared, and unused code is gone.
+- Tests: `npm test` now also runs `test/match.test.mjs` (tempo match, key fit, Key Match over all 576 key pairs, tuning, the beat-match meter).
+
 ## What's new in 0.3.8-beta
 
 - **Sync rebuilt from scratch.** Every synced deck locks to one shared clock (the way Mixxx and Ableton Link do it), and a phase lock keeps them together with tiny, inaudible speed trims, so decks never drift apart. Sync picks ½×, 1× or 2× once (the ratio button: Auto / ½× / 1× / 2×) and never flips it mid-mix.
@@ -86,12 +100,12 @@ Your library and downloads live in `%APPDATA%\Commons DJ` (the **Open download f
 
 - **Two decks** with play/cue, 4 hot cues, beat loops (1/2/4/8), tempo slider (±8/16/50%), nudge, and **SYNC** that matches tempo and beat phase.
 - **Automatic BPM and beat grid** detection on first load, with ÷2 / ×2 / TAP / BEAT to fix the grid by hand.
-- **Key detection** (Camelot + key name), **key shift** (♭/♯ without changing tempo), **key lock** (tempo without changing pitch) and **MATCH** to put a deck in the other deck's key.
+- **Key detection** (Camelot + key name), **key shift** (♭/♯ without changing tempo), **key lock** (tempo without changing pitch) and **MATCH** to put a deck in a key that mixes with the other deck's, tuned to it.
 - **Stems**: turn vocals, drums or instruments on and off per deck in real time (DSP separation, approximate — see `docs/new-features/key-and-stems.md`).
 - **AI stems (prototype)**: if the HT-Demucs model and ONNX Runtime are installed, each track is separated once in the background and the stem buttons switch to the clean AI stems — see `docs/new-features/ai-stems-plan.md`.
 - **Mixer** with trim, 3-band EQ (kills at the bottom), one-knob filter (left = low-pass, right = high-pass), channel faders with meters, a crossfader with Blend or Cut curves, and a limiter on the master.
 - **Scrolling waveforms** that stay beat-aligned across both decks, plus an overview you can click to seek.
-- **Library** for your own files (drag them into the window or use Add files).
+- **Library** for your own files (drag them into the window or use Add files), sortable by any column, with marks for the tracks that fit the deck on air in tempo and key.
 - **Creative Commons search**, which uses YouTube's own Creative Commons filter through yt-dlp. You can also paste a link.
 - ~~**License gate**~~: removed in this build (see `docs/license-gate-features/`).
 - **Credits**: collects attribution lines for every CC track you play, ready to paste into a mix description (CC BY requires credit).
@@ -103,6 +117,7 @@ Your library and downloads live in `%APPDATA%\Commons DJ` (the **Open download f
 | `X` play / pause | `,` play / pause | `←` `→` crossfader |
 | `Z` cue | `M` cue | `Shift` + arrows: slam |
 | `C` sync | `.` sync | `/` filter library |
+| `Shift`+`C` match tempo only | `Shift`+`.` match tempo only | |
 | `1`–`4` hot cues | `7`–`0` hot cues | `?` help |
 | `Q` / `W` nudge | `O` / `P` nudge | |
 
@@ -122,7 +137,7 @@ Requires Node.js 22+.
 npm install
 npm run fetch-ytdlp     # grabs yt-dlp for this computer, so `npm start` works
 npm start               # run in development
-npm test                # tempo-detection tests
+npm test                # analysis, sync clock and matching tests
 npm run package:win-arm64
 npm run package:win-x64
 ```
@@ -131,10 +146,15 @@ Project layout:
 
 - `src/main.js` handles the window, library storage, and yt-dlp (search, license check, download).
 - `src/preload.js` is the bridge between the UI and the main process.
-- `src/renderer/engine.js` is the Web Audio engine (decks, EQ, filter, loops, sync, crossfader).
+- `src/renderer/engine.js` is the Web Audio engine (decks, EQ, filter, loops, crossfader).
+- `src/renderer/sync.js` is the sync clock every synced deck locks to.
+- `src/renderer/match.js` is the matching maths: tempo match, key fit on the Camelot wheel, Key Match.
 - `src/renderer/deck-fx.worklet.js` is the per-deck audio-thread processor for key shift / key lock / stems.
 - `src/renderer/analysis.js` holds the waveform, BPM/beat-grid and key detection.
-- `src/renderer/app.js` is the UI.
+- `src/renderer/app.js` starts the UI, which lives in `src/renderer/ui/`:
+  `core.js` (shared state and helpers), `deck.js`, `mixer-ui.js`, `waves.js` (waveforms and the frame loop),
+  `sync-ui.js` (Sync, tempo match, Key Match, snap), `grid.js` (hot cues and beat-grid fixes), `load.js`
+  (decoding, analysis, AI stems), `library.js`, `search.js`, `video.js`, `settings.js`, `keyboard.js`, `knob.js`.
 
 ## Notes and limits
 

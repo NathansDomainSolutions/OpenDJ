@@ -25,6 +25,19 @@ const EAR_SHIFTS = 128; // trial shifts across one beat
 
 const wrap = (x, q = 1) => x - q * Math.round(x / q); // into [-q/2, q/2]
 
+/**
+ * How far `deck`'s beats are from `other`'s at context time t, in heard seconds (+ = ahead; at
+ * most half a beat of the faster deck). Needs no sync: it's what a DJ lines up by ear. A deck
+ * at about double or half the other's tempo is compared at that ratio.
+ */
+export function beatGap(deck, other, t) {
+  const r = (deck.bpm * deck.speed) / (other.bpm * other.speed);
+  const mine = deck.deckBeat(deck.positionAt(t));
+  const theirs = other.deckBeat(other.positionAt(t));
+  if (r < Math.SQRT1_2) return (wrap(2 * mine - theirs) * other.beatPeriod) / other.speed; // half time: on the other's beats
+  return (wrap(mine - (r > Math.SQRT2 ? 2 : 1) * theirs) * deck.beatPeriod) / deck.speed;
+}
+
 export class SyncGroup {
   constructor(mixer, { onChange = () => {} } = {}) {
     this.mixer = mixer;

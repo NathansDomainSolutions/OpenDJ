@@ -1,6 +1,6 @@
 /* One theme: dark, flat, quiet. Colour is reserved for state — orange is deck A,
    blue is deck B, green is "good / Creative Commons", red is "warning".
-   Canvas colours live in app.js (ACCENT / INK); keep them in sync with --a / --b. */
+   Canvas colours live in ui/settings.js (THEMES); keep them in sync with --a / --b. */
 :root {
   --bg: #0b0b0d;
   --panel: #141417;
@@ -221,7 +221,9 @@ input[type='range']::-webkit-slider-runnable-track { background: var(--panel-3);
 }
 /* Marker on the label edge so the turning is easy to read. */
 .vinyl-label::after { content: ''; position: absolute; top: 3px; left: 50%; width: 3px; height: 8px; margin-left: -1.5px; border-radius: 2px; background: rgba(0, 0, 0, 0.55); }
-.barpos { letter-spacing: 0.08em; color: var(--accent); min-height: 15px; }
+.beatline { display: flex; align-items: center; gap: 8px; min-height: 15px; white-space: nowrap; }
+.deck[data-deck='B'] .beatline, .deck[data-deck='D'] .beatline { flex-direction: row-reverse; }
+.barpos { letter-spacing: 0.08em; color: var(--accent); }
 .overview { width: 100%; height: 46px; background: var(--panel-2); border-radius: 8px; cursor: pointer; display: block; }
 
 .row { display: flex; align-items: center; gap: 6px; }
@@ -1015,3 +1017,32 @@ body:not([data-theme]), body[data-theme='dark'] {
 body:is([data-theme='aloe'], [data-theme='mist']) :is(.deck, .wave-row, .table-wrap, .cc-item, .cc-info, .xypad, .dlg, .theme-card, .mixer) {
   box-shadow: 0 1px 2px rgba(18, 40, 30, 0.06), 0 6px 18px rgba(18, 40, 30, 0.08) !important;
 }
+
+/* ---- Matching ---- */
+/* Beat-match meter beside the bar counter: a dot on a short bar; the middle means this
+   deck's beats land with the other deck's. Amber while off, green once within 5 ms. */
+.phase { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.phase[hidden] { display: none; }
+.phase-bar { position: relative; flex: none; width: 52px; height: 4px; border-radius: 2px; background: var(--panel-3); }
+.phase-bar::before { content: ''; position: absolute; left: calc(50% - 0.5px); top: -3px; bottom: -3px; width: 1px; background: var(--muted); opacity: 0.6; }
+.phase-bar i { position: absolute; top: -2px; width: 8px; height: 8px; margin-left: -4px; border-radius: 50%; background: var(--warn); }
+.phase.locked .phase-bar i { background: var(--cc); }
+.phase.locked .phase-ms { color: var(--cc); }
+
+/* Key fit with the other deck: a dot in the key readout. Green = same or relative key,
+   a green ring = one step round the Camelot wheel, red = a clash. */
+.key-read[data-fit='same']::before, .key-read[data-fit='relative']::before, .key-read[data-fit='adjacent']::before, .key-read[data-fit='clash']::before {
+  content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; vertical-align: 1px;
+  background: var(--cc); box-shadow: inset 0 0 0 2px var(--cc);
+}
+.key-read[data-fit='adjacent']::before { background: transparent; }
+.key-read[data-fit='clash']::before { background: var(--bad); box-shadow: none; }
+
+/* Library: sortable columns, and marks for what mixes with the deck on air. */
+.lib th[data-sort] { cursor: pointer; }
+.lib th[data-sort]:hover, .lib th[aria-sort='ascending'], .lib th[aria-sort='descending'] { color: var(--text); }
+.lib th[aria-sort='ascending']::after { content: ' ▲'; font-size: 8px; }
+.lib th[aria-sort='descending']::after { content: ' ▼'; font-size: 8px; }
+.lib td.fit, .lib td.fit .dim { color: var(--cc); }
+.lib td.fit-adjacent, .lib td.fit-adjacent .dim { color: color-mix(in srgb, var(--cc) 62%, var(--muted)); }
+#libMatch.on { background: var(--cc); color: var(--on-accent); }

@@ -83,7 +83,7 @@ const TARGET_ENV_RATE = 200; // onset envelope frames per second (approx.)
 /** Bumped when the grid maths change, so the app knows which stored grids to re-analyse. */
 export const ANALYSIS_VERSION = 2;
 /** Bumped when key detection changes, so stored keys (and chroma) are found again. */
-export const KEY_VERSION = 3;
+export const KEY_VERSION = 4;
 
 // Seconds added to a measured onset so a kick's attack sample is the beat (frames are
 // timestamped at their centre; the log-energy rise still peaks a little after the attack).
@@ -814,7 +814,10 @@ function fftInPlace(re, im) {
  * interpolation, the track's tuning (records are often a few cents off A440) is measured
  * from them first, and each peak counts at its plain magnitude: log-squashing the peaks let
  * the hiss and overtones of dense mixes flatten the chroma until neighbouring keys tied.
+ * Returns { chroma, tuning }: tuning is how far the track sits from concert pitch, in
+ * semitones (−0.5…0.5), or 0 when its peaks don't agree on one.
  */
+const TUNING_AGREE = 0.3; // below this the tuning reading is noise
 export function chromagram(mono, sampleRate, { maxFrames = 600 } = {}) {
   // Work at ~11 kHz: plenty for 55 Hz–2 kHz, and 4× less to transform.
   const dec = Math.max(1, Math.round(sampleRate / 11025));
@@ -872,6 +875,10 @@ export function chromagram(mono, sampleRate, { maxFrames = 600 } = {}) {
     sn += peaks[i + 1] * Math.sin(ph);
   }
   const tuning = Math.atan2(sn, cs) / (2 * Math.PI); // semitones
+  // How much the peaks agree on that tuning (0…1): drums and noise scatter, pitched music doesn't.
+  let total = 0;
+  for (let i = 1; i < peaks.length; i += 3) total += peaks[i];
+  const agree = total > 0 ? Math.hypot(cs, sn) / total : 0;
 
   // Pass 2: fold the peaks into pitch classes, each frame normalised so loud bars don't dominate.
   const chroma = new Float64Array(12);
@@ -894,7 +901,7 @@ export function chromagram(mono, sampleRate, { maxFrames = 600 } = {}) {
     if (d < 0.4) frameChroma[((nearest % 12) + 12) % 12] += peaks[i + 1] * Math.cos((d / 0.4) * (Math.PI / 2)) ** 2;
   }
   flush();
-  return chroma;
+  return { chroma, tuning: agree >= TUNING_AGREE ? tuning : 0 };
 }
 
 function correlate(a, b) {
@@ -920,13 +927,13 @@ function correlate(a, b) {
 }
 
 /**
- * Detect the musical key. Returns { key, confidence, scores, chroma } with key 0–23
- * (see keyName / camelot) and chroma the track's 12 pitch-class shares (C first), or null
- * when there's no clear tonal content.
+ * Detect the musical key. Returns { key, confidence, scores, chroma, tuning } with key 0–23
+ * (see keyName / camelot), chroma the track's 12 pitch-class shares (C first) and tuning its
+ * distance from concert pitch in semitones, or null when there's no clear tonal content.
  */
 export function detectKey(mono, sampleRate) {
   if (mono.length / sampleRate < 5) return null;
-  const chroma = chromagram(mono, sampleRate);
+  const { chroma, tuning } = chromagram(mono, sampleRate);
   if (chroma.every((v) => v === 0)) return null;
   const scores = [];
   for (let tonic = 0; tonic < 12; tonic++) {
@@ -945,29 +952,37 @@ export function detectKey(mono, sampleRate) {
   const confidence = Math.max(0, Math.min(1, (best.r - (runnerUp?.r ?? 0)) * 4));
   let total = 0;
   for (const v of chroma) total += v;
-  return { key: best.key, confidence, scores: scores.slice(0, 4), chroma: Array.from(chroma, (v) => Math.round((v / total) * 1e4) / 1e4) };
+  return { key: best.key, confidence, scores: scores.slice(0, 4), chroma: Array.from(chroma, (v) => Math.round((v / total) * 1e4) / 1e4), tuning: Math.round(tuning * 100) / 100 };
 }
 
 /** Chroma moved up by s semitones. */
 const rotateChroma = (ch, s) => Array.from({ length: 12 }, (_, i) => ch[(((i - s) % 12) + 12) % 12]);
 
 /**
- * The key shift that makes one track's notes sit best with another's, by comparing what
- * the two actually play (their chroma), not their key names. `theirOffset` is how far the
- * other deck already plays from its own key (semitones, may be fractional); the answer
- * matches its fine detune too. Small moves win ties: each semitone costs 0.01 in fit.
- * Returns { shift, fit, fitNow } (fit = chroma correlation, -1…1) or null.
+ * How well one track's notes agree with another's at each key shift, by comparing what the
+ * two actually play (their chroma), not their key names: [{ shift, fit }] for `mine` moved
+ * −6…+6 semitones against `theirs` moved `theirShift` (whole semitones). fit = chroma
+ * correlation, −1…1.
+ */
+export function keyShiftFits(mine, theirs, theirShift = 0) {
+  const heard = rotateChroma(theirs, theirShift);
+  return Array.from({ length: 13 }, (_, i) => ({ shift: i - 6, fit: correlate(rotateChroma(mine, i - 6), heard) }));
+}
+
+/**
+ * The key shift where two tracks' notes agree best (see keyShiftFits). `theirOffset` is how
+ * far the other deck already plays from its own key (semitones, may be fractional); the
+ * answer matches its fine detune too. Small moves win ties: each semitone costs 0.01 in fit.
+ * Returns { shift, fit, fitNow } or null.
  */
 export function bestKeyShift(mine, theirs, theirOffset = 0, myOffset = 0) {
   if (!mine?.length || !theirs?.length) return null;
   const whole = Math.round(theirOffset);
-  const heard = rotateChroma(theirs, whole);
-  let best = null;
-  for (let s = -6; s <= 6; s++) {
-    const fit = correlate(rotateChroma(mine, s), heard);
-    if (!best || fit - 0.01 * Math.abs(s) > best.fit - 0.01 * Math.abs(best.shift)) best = { shift: s, fit };
-  }
-  return { shift: best.shift + (theirOffset - whole), fit: best.fit, fitNow: correlate(rotateChroma(mine, Math.round(myOffset)), heard) };
+  const fits = keyShiftFits(mine, theirs, whole);
+  const score = (c) => c.fit - 0.01 * Math.abs(c.shift);
+  const best = fits.reduce((a, b) => (score(b) > score(a) ? b : a));
+  const now = Math.max(-6, Math.min(6, Math.round(myOffset)));
+  return { shift: best.shift + (theirOffset - whole), fit: best.fit, fitNow: fits[now + 6].fit };
 }
 
 /**

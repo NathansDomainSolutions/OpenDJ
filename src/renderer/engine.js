@@ -1,4 +1,4 @@
-// Audio engine: two decks → mixer → master limiter → speakers.
+// Audio engine: four decks → mixer → master limiter → speakers.
 // Built on the Web Audio API. Tempo changes are vinyl-style (pitch follows
 // speed) unless key lock is on. Each deck runs through a deck-fx worklet
 // (key shift / key lock / stems) before its EQ.
@@ -15,6 +15,9 @@ export const AI_STEM_NAMES = ['drums', 'bass', 'other', 'vocals'];
 // Starts, stops and jumps are scheduled this far ahead. Starting "now" can land a whole
 // device period late (10 ms here) and stay that late; a little lookahead is always exact.
 export const LOOKAHEAD = 0.025;
+
+// The deck-fx worklet (key shift / stems) delays a deck by one STFT frame (FRAME in deck-fx.worklet.js).
+const FX_DELAY_FRAMES = 2048;
 
 export class Mixer {
   constructor() {
@@ -184,11 +187,6 @@ export class Deck {
     this.sources = []; // all running sources (1, or 4 with AI stems)
   }
 
-  /** Where the sources play into (then through the fx node when loaded, then the EQ). */
-  get input() {
-    return this.bus;
-  }
-
   attachFx() {
     if (this.fx) return;
     this.fx = new AudioWorkletNode(this.ctx, 'deck-fx', {
@@ -240,6 +238,11 @@ export class Deck {
     if (this.loop && (this.pausedPos < this.loop.start || this.pausedPos >= this.loop.end)) this.loop = null;
     if (resume) this.play();
     else this.emit('seek');
+  }
+
+  /** Seconds the deck-fx node holds this deck's audio back (0 until it has loaded). */
+  get fxDelay() {
+    return this.fx ? FX_DELAY_FRAMES / this.ctx.sampleRate : 0;
   }
 
   /** Bar grid: { beatsPerBar, downbeat } with fallbacks for tracks analysed before bars existed. */
@@ -342,25 +345,6 @@ export class Deck {
     this.keyLock = !!on;
     this.sendFx();
     this.emit('key');
-  }
-
-  /**
-   * Shift this deck so it plays in the other deck's (heard) key, or its
-   * relative major/minor — same Camelot number, so they mix harmonically.
-   * Turns key lock on, so the match holds when tempo moves. Returns the shift
-   * in semitones, or null if either key is unknown.
-   */
-  matchKeyTo(other) {
-    const mine = this.track?.key;
-    const theirs = other.track?.key;
-    if (mine == null || mine < 0 || theirs == null || theirs < 0) return null;
-    const relMajor = (k) => (k % 12) + (k >= 12 ? 3 : 0);
-    let s = relMajor(theirs) + other.keyOffset - relMajor(mine);
-    s = ((s % 12) + 12) % 12;
-    if (s >= 6) s -= 12; // smallest move: −6…+6
-    this.keyLock = true;
-    this.setKeyShift(s);
-    return this.keyShift;
   }
 
   /** Stem level 0..1 (vocals | drums | instruments). */
@@ -468,7 +452,7 @@ export class Deck {
     // One source for the mixed track, or four (one per AI stem) started together.
     const plan = this.aiStems
       ? AI_STEM_NAMES.map((n) => [this.aiStems[n], this.aiGains[n]])
-      : [[this.buffer, this.input]];
+      : [[this.buffer, this.bus]];
     // Read ahead by the stretcher's delay (lead = 0 without it); inside a loop, wrap into it.
     let offset = at + (this.lead || 0) * this.speed;
     if (this.loop && offset >= this.loop.end) offset = this.loop.start + ((offset - this.loop.start) % (this.loop.end - this.loop.start));
@@ -869,9 +853,8 @@ export class FxChain {
     const step = 60 / d.bpm / g.div; // track seconds per gate step
     const pos = d.position;
     const next = d.track.beatOffset + Math.ceil((pos - d.track.beatOffset) / step) * step;
-    // The deck-fx node ahead of the gate delays the audio by 2048 samples: open on the step as heard.
-    const fxDelay = d.fx ? 2048 / this.ctx.sampleRate : 0;
-    const when = this.ctx.currentTime + (next - pos) / d.rate + fxDelay;
+    // The deck-fx node ahead of the gate delays the audio: open on the step as heard.
+    const when = this.ctx.currentTime + (next - pos) / d.rate + d.fxDelay;
     const osc = this.ctx.createOscillator();
     osc.setPeriodicWave(this.gateWave);
     osc.frequency.value = d.rate / step; // steps per real second
