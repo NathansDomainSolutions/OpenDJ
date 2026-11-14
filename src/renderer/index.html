@@ -148,6 +148,7 @@
       <button class="tab" data-tab="sfx" role="tab" aria-selected="false">SFX</button>
       <div class="tab-tools" data-for="library">
         <input id="libFilter" class="field" type="search" placeholder="Filter library  ( / )" />
+        <button class="btn ghost" id="libMatch" aria-pressed="false">Match</button>
         <button class="btn" id="addFiles">Add files</button>
         <button class="btn ghost" id="openFolder">Open download folder</button>
       </div>
@@ -158,7 +159,10 @@
       <div class="table-wrap">
         <table class="lib">
           <thead>
-            <tr><th class="c-load">Load</th><th>Title</th><th>Artist</th><th class="num">BPM</th><th class="c-key">Key</th><th class="num">Time</th><th>Source</th><th class="c-act"></th></tr>
+            <tr title="Click a column to sort by it; again to reverse; a third time for the order tracks were added">
+              <th class="c-load">Load</th><th data-sort="title">Title</th><th data-sort="artist">Artist</th><th class="num" data-sort="bpm">BPM</th>
+              <th class="c-key" data-sort="key">Key</th><th class="num" data-sort="duration">Time</th><th>Source</th><th class="c-act"></th>
+            </tr>
           </thead>
           <tbody id="libBody"></tbody>
         </table>
@@ -216,12 +220,12 @@
     <div class="keys">
       <div>
         <h3 class="a">Deck A</h3>
-        <p><kbd>X</kbd> play / pause</p><p><kbd>Z</kbd> cue</p><p><kbd>C</kbd> sync / unlock</p>
+        <p><kbd>X</kbd> play / pause</p><p><kbd>Z</kbd> cue</p><p><kbd>C</kbd> sync / unlock</p><p><kbd>Shift</kbd>+<kbd>C</kbd> match tempo only</p>
         <p><kbd>1</kbd>–<kbd>4</kbd> hot cues</p><p><kbd>Q</kbd> / <kbd>W</kbd> nudge (hold)</p>
       </div>
       <div>
         <h3 class="b">Deck B</h3>
-        <p><kbd>,</kbd> play / pause</p><p><kbd>M</kbd> cue</p><p><kbd>.</kbd> sync / unlock</p>
+        <p><kbd>,</kbd> play / pause</p><p><kbd>M</kbd> cue</p><p><kbd>.</kbd> sync / unlock</p><p><kbd>Shift</kbd>+<kbd>.</kbd> match tempo only</p>
         <p><kbd>7</kbd>–<kbd>0</kbd> hot cues</p><p><kbd>O</kbd> / <kbd>P</kbd> nudge (hold)</p>
       </div>
       <div>
@@ -232,6 +236,9 @@
     </div>
     <p class="muted small">Hot cues: click an empty pad to set it, click again to jump, right-click to clear.
       Knobs: drag up/down, scroll, double-click to reset. Tempo slider: double-click to reset.</p>
+    <p class="muted small">Matching: the dot by a deck's key is green when it's in key with the other deck (a ring: one step round the
+      wheel) and red when it clashes. In the library, a green BPM is within 6% of the deck on air and a green key mixes with it;
+      <b>Match</b> puts the best fits first. Click a column heading to sort.</p>
     <form method="dialog"><button class="btn">Close</button></form>
   </dialog>
 
@@ -269,6 +276,10 @@
       <div class="set-grid">
         <label for="setOutput">Output device</label>
         <select id="setOutput" class="field"><option value="">System default</option></select>
+        <span>Audio buffer</span>
+        <div class="seg" id="bufferSeg" role="radiogroup" aria-label="Audio buffer" title="Low answers fastest. Stable gives a slower computer more room, so audio doesn't crackle. Applies the next time OpenDJ starts.">
+          <button data-buffer="low" role="radio" aria-checked="false">Low delay</button><button data-buffer="balanced" class="on" role="radio" aria-checked="true">Balanced</button><button data-buffer="stable" role="radio" aria-checked="false">Stable</button>
+        </div>
         <label for="setVolume">Master volume</label>
         <input id="setVolume" class="hslider" type="range" min="0" max="1" step="0.01" value="0.85" />
         <span>Music videos</span>
@@ -341,14 +352,17 @@
           <div class="bpm">
             <span class="bpm-eff">—.—</span><span class="bpm-unit">BPM</span>
             <div class="bpm-sub"><span class="rate">0.00%</span> · <span class="bpm-track">no grid</span></div>
-            <div class="bpm-sub barpos" title="Bar . beat"></div>
+            <div class="bpm-sub beatline">
+              <span class="barpos" title="Bar . beat"></span>
+              <span class="phase" hidden title="Beat match: the dot sits in the middle when this deck's beats land with the other deck's; left = behind, right = ahead"><span class="phase-bar"><i></i></span><span class="phase-ms"></span></span>
+            </div>
           </div>
         </div>
         <canvas class="overview"></canvas>
         <div class="row transport">
           <button class="pad cue" title="Cue: set or jump back to the cue point">Cue</button>
           <button class="pad play" title="Play / pause">▶</button>
-          <button class="pad sync" title="Sync: match tempo and beat to the other deck and keep the tempos locked together. Press again to unlock.">Sync</button>
+          <button class="pad sync" title="Sync: take the other deck's tempo and put this deck's beats on its beats, now, and keep them there. Press again to unlock. Shift-click: take the other deck's tempo once, without locking.">Sync</button>
           <button class="mini sync-mult" aria-label="Sync ratio" title="Sync ratio: sync at ½×, 1× or 2× the other deck's tempo (click to change)">1×</button>
           <div class="nudge">
             <button class="mini nudge-back" title="Nudge back (hold)">◀◀</button>
@@ -371,6 +385,7 @@
           <span class="label" title="Fix the detected tempo / beat grid">BPM</span>
           <button class="mini half" title="Halve BPM">÷2</button>
           <button class="mini double" title="Double BPM">×2</button>
+          <button class="mini alt-bpm" title="Alt: try the analyser's next tempo reading for this track (when ÷2 or ×2 isn't it: the usual misreads are ⅔, ¾, 4⁄3 or 5⁄4 of the real tempo)">Alt</button>
           <button class="mini tap" title="Tap along to set BPM">Tap</button>
           <button class="mini beat-here" title="Make the playhead beat 1 of the bar (fixes the grid and the bar start)">Beat 1</button>
           <button class="mini meter" title="Time signature — click to switch between 4/4 and 3/4">4/4</button>
@@ -381,7 +396,7 @@
           <button class="mini key-down" title="Key down a semitone (tempo unchanged)">−</button>
           <button class="mini key-up" title="Key up a semitone (tempo unchanged)">+</button>
           <button class="mini key-lock" title="Key lock: the tempo slider changes speed only, not pitch">Lock</button>
-          <button class="mini key-match" title="Shift this deck into the other deck's key (or its relative major/minor)">Match</button>
+          <button class="mini key-match" title="Key match: the smallest shift that puts this deck in a key that mixes with the other deck, tuned to it (key lock comes on). Shift-click: the very same key.">Match</button>
         </div>
         <div class="row stemrow" title="Stems — real-time split of this deck into vocals, drums and instruments">
           <span class="label">Stems</span>

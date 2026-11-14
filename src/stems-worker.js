@@ -24,10 +24,12 @@ let provider = null;
 // The graphics card (DirectML) when it can hold the model, else the CPU.
 // CPU settings, measured on a Snapdragon X Plus (8 cores): memory arena off cuts
 // RAM from ~4.8 GB to ~0.5 GB; 4 threads is fastest and leaves cores for audio and the UI.
+// Bigger processors get more: half the logical cores, between 4 and 8.
+const CPU_THREADS = Math.min(8, Math.max(4, Math.floor(require('os').availableParallelism() / 2)));
 async function getSession() {
   if (session) return session;
   ort = require(workerData.runtimePath);
-  const cpu = { executionProviders: ['cpu'], graphOptimizationLevel: 'all', enableCpuMemArena: false, intraOpNumThreads: 4 };
+  const cpu = { executionProviders: ['cpu'], graphOptimizationLevel: 'all', enableCpuMemArena: false, intraOpNumThreads: CPU_THREADS };
   try {
     session = await ort.InferenceSession.create(workerData.modelPath, { executionProviders: ['dml'], graphOptimizationLevel: 'all', enableMemPattern: false });
     provider = 'dml';
@@ -44,7 +46,7 @@ async function run(feeds) {
     return await session.run(feeds);
   } catch (err) {
     if (provider !== 'dml') throw err;
-    session = await ort.InferenceSession.create(workerData.modelPath, { executionProviders: ['cpu'], graphOptimizationLevel: 'all', enableCpuMemArena: false, intraOpNumThreads: 4 });
+    session = await ort.InferenceSession.create(workerData.modelPath, { executionProviders: ['cpu'], graphOptimizationLevel: 'all', enableCpuMemArena: false, intraOpNumThreads: CPU_THREADS });
     provider = 'cpu';
     return session.run(feeds);
   }

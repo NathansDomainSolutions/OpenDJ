@@ -1,270 +1,256 @@
-// Unit tests for the sync clock (src/renderer/sync.js) with simulated decks and a
-// controllable clock. Run: node test/sync.test.mjs
+// The sync clock (src/renderer/sync.js), driven with model decks on a model audio clock.
+// Run: node test/sync.test.mjs
 import { SyncGroup } from '../src/renderer/sync.js';
+import { BeatGrid } from '../src/renderer/beatgrid.js';
 
 let fails = 0;
-const check = (name, ok, info = '') => {
-  console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${info ? ': ' + info : ''}`);
+function check(name, ok, detail = '') {
+  console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? `: ${detail}` : ''}`);
   if (!ok) fails++;
-};
-const wrap = (x) => x - Math.round(x);
+}
 
-// A deck with the engine's position bookkeeping (startPos / startTime / speed, scheduled starts).
-class FakeDeck {
-  constructor(ctx, name, bpm, downbeat = 0, beatsPerBar = 4) {
-    Object.assign(this, { ctx, name, rate: 1, bendFactor: 1, busyUntil: 0, playing: false, pausedPos: 0, startPos: 0, startTime: 0, scratching: false });
-    this.track = { bpm, beatOffset: downbeat, downbeat, beatsPerBar };
-    this.fader = { gain: { value: 1 } };
-    this.xfade = { gain: { value: 1 } };
-    this.trims = [];
+const ctx = { currentTime: 100 };
+const TICK = 0.025;
+
+/** A deck as the sync clock sees it: a playhead moving at its rate over a track with a beat grid. */
+class ModelDeck {
+  constructor(name, track) {
+    Object.assign(this, { name, track, ctx, rate: 1, bendFactor: 1, scratching: false, busyUntil: 0, playing: false, pausedPos: 0, startPos: 0, startTime: 0, jumps: 0, forcedK: null });
   }
+  get grid() { return BeatGrid.of(this.track); }
   get bpm() { return this.track.bpm; }
-  get bars() { return { beatsPerBar: this.track.beatsPerBar, downbeat: this.track.downbeat }; }
   get speed() { return this.rate * this.bendFactor; }
-  get beatPeriod() { return 60 / this.bpm; }
-  get duration() { return 600; }
-  deckBeat(pos) { return (pos - this.track.downbeat) / this.beatPeriod; }
-  positionAt(t) {
-    if (!this.playing) return this.pausedPos;
-    if (t < this.startTime) return this.startPos;
-    return this.startPos + (t - this.startTime) * this.speed;
-  }
-  get position() { return this.positionAt(this.ctx.currentTime); }
-  setRate(rate) {
-    if (this.playing && this.ctx.currentTime >= this.startTime) {
-      this.startPos = this.position;
-      this.startTime = this.ctx.currentTime;
-    }
-    this.rate = rate;
-  }
-  play({ at = this.pausedPos, when = this.ctx.currentTime + 0.025 } = {}) {
-    this.playing = true;
-    this.startPos = at;
-    this.startTime = when;
-    this.busyUntil = when;
-  }
+  get position() { return this.positionAt(ctx.currentTime); }
+  get effectiveBpm() { return this.grid.bpmAt(this.position) * this.rate; }
+  positionAt(t) { return this.playing ? this.startPos + Math.max(0, t - this.startTime) * this.speed : this.pausedPos; }
+  anchor(pos, t) { this.startPos = pos; this.startTime = t; }
+  setRate(rate) { this.anchor(this.positionAt(ctx.currentTime), ctx.currentTime); this.rate = rate; }
+  bend(amount) { this.anchor(this.position, ctx.currentTime); this.bendFactor = 1 + amount; }
+  play({ at = this.pausedPos, when = ctx.currentTime } = {}) { this.playing = true; this.anchor(at, when); }
   pause() { this.pausedPos = this.position; this.playing = false; }
-  jumpTo(pos, when) { this.startPos = pos; this.startTime = when; this.busyUntil = when; }
-  trimPulse(eps, when, dur) { this.startPos += eps * this.speed * dur; this.trims.push(eps); }
+  jumpTo(pos, when) { if (!this.playing) return void (this.pausedPos = pos); this.anchor(pos, when); this.jumps++; }
+  trimPulse(eps, _when, dur) { this.startPos += eps * this.speed * dur; }
 }
 
-const ctx = { currentTime: 10 };
-const mixer = { ctx };
-const mk = () => {
-  const g = new SyncGroup(mixer);
-  clearInterval(g.timer); // ticks are driven by hand
-  return g;
-};
-const step = (g, sec) => {
-  for (let t = 0; t < sec; t += 0.025) {
-    ctx.currentTime += 0.025;
-    g.tick();
-  }
-};
-const errBeats = (a, b) => wrap(a.deckBeat(a.position) - b.deckBeat(b.position)); // same-tempo decks
+const steady = (bpm, beatOffset = 0) => ({ bpm, beatOffset });
+/** A track whose tempo wanders ±`depth` around bpm (a band without a click), with its tempo map. */
+function wandering(bpm, depth, seconds = 400) {
+  const d = [];
+  for (let pos = 0; pos <= seconds; pos += 2) d.push(Math.round(((depth * 47) / (2 * Math.PI)) * (1 - Math.cos((2 * Math.PI * pos) / 47)) * 1e4) / 10);
+  return { bpm, beatOffset: 0.2, warp: { step: 2, d } };
+}
 
-// 1. Multiplier choice (√2 rule) and rate; even far-apart tempos (174 vs 128) sync at the nearest level.
-{
-  const g = mk();
-  const lead = new FakeDeck(ctx, 'A', 128);
-  lead.play();
-  ctx.currentTime += 1;
-  for (const [bpm, k] of [[124, 1], [64, 0.5], [174, 1], [250, 2]]) {
-    const d = new FakeDeck(ctx, 'B', bpm);
-    g.members.clear();
-    const res = g.join(d, lead);
-    check(`k for ${bpm} vs 128`, res.ok && res.k === k && Math.abs(d.rate - (128 * k) / bpm) < 1e-9, `k=${res.k} rate=${d.rate.toFixed(4)}`);
+function setup(...tracks) {
+  ctx.currentTime = 100;
+  const decks = tracks.map((t, i) => new ModelDeck('ABCD'[i], t));
+  const group = new SyncGroup({ ctx });
+  clearInterval(group.timer); // the test turns the clock by hand
+  return { group, decks };
+}
+function run(group, seconds, each) {
+  for (let t = 0; t < seconds; t += TICK) {
+    ctx.currentTime += TICK;
+    group.tick();
+    each?.();
   }
 }
-
-// 2. Sync while playing: lines up beats within ½ beat, keeps the leader untouched.
-{
-  const g = mk();
-  const a = new FakeDeck(ctx, 'A', 128, 0.123);
-  const b = new FakeDeck(ctx, 'B', 126, 0.05);
-  a.play({ at: 30 });
-  b.play({ at: 61.3 });
-  ctx.currentTime += 0.5;
-  const aPos = a.position;
-  const res = g.join(b, a);
-  ctx.currentTime += 0.1;
-  check('join ok', res.ok);
-  check('leader keeps its tempo and place', a.rate === 1 && Math.abs(a.position - (aPos + 0.1)) < 1e-9);
-  const tb = (x) => x.deckBeat(x.position);
-  check('beats line up after join', Math.abs(wrap(tb(b) - tb(a))) < 1e-6, `${wrap(tb(b) - tb(a)).toFixed(6)} beats`);
-  step(g, 30);
-  check('still in phase after 30 s', Math.abs(wrap(tb(b) - tb(a))) < 1e-6);
+/** Beats of `a` against beats of `b` right now, in heard ms, at tempo ratio k (a runs at k × b). */
+function gapMs(a, b, k = 1) {
+  // Compared on the faster deck's beats: a half-time deck may sit on either of the other's beats.
+  const x = k < 1 ? a.grid.beatAt(a.position) / k - b.grid.beatAt(b.position) : a.grid.beatAt(a.position) - k * b.grid.beatAt(b.position);
+  const fast = k < 1 ? b : a;
+  return (x - Math.round(x)) * (fast.grid.beatSeconds(fast.position) / fast.speed) * 1000;
 }
-
-// 3. Pressing Sync on the deck on air (partner paused) moves the paused one, not the playing one.
-{
-  const g = mk();
-  const a = new FakeDeck(ctx, 'A', 128);
-  const b = new FakeDeck(ctx, 'B', 125);
-  a.play({ at: 20 });
-  b.pausedPos = 40.17;
-  ctx.currentTime += 0.3;
-  const before = a.position;
-  g.join(a, b);
-  check('on-air deck not moved or retimed', a.rate === 1 && Math.abs(a.position - before) < 1e-9);
-  check('paused partner took the tempo', Math.abs(b.rate - 128 / 125) < 1e-9);
-}
-
-// 4. Tempo move on a member: clock and others follow, phase continuous.
-{
-  const g = mk();
-  const a = new FakeDeck(ctx, 'A', 128);
-  const b = new FakeDeck(ctx, 'B', 120);
-  a.play({ at: 10 });
-  b.play({ at: 50.2 });
-  ctx.currentTime += 0.2;
-  g.join(b, a);
-  step(g, 2);
-  a.setRate(1.05);
-  g.setTempoFrom(a);
-  check('follower follows tempo', Math.abs(b.effectiveBpm ?? b.bpm * b.rate - 128 * 1.05) < 1e-6, (b.bpm * b.rate).toFixed(3));
-  step(g, 10);
-  const e = wrap(b.deckBeat(b.position) - a.deckBeat(a.position));
-  check('in phase after a tempo move', Math.abs(e) < 1e-4, `${(e * 1000).toFixed(3)} mbeat`);
-}
-
-// 5. Phase lock pulls a 10 ms slip back smoothly (no overshoot, no jump).
-{
-  const g = mk();
-  const a = new FakeDeck(ctx, 'A', 128);
-  const b = new FakeDeck(ctx, 'B', 128);
-  a.play({ at: 10 });
-  b.play({ at: 10 });
-  ctx.currentTime += 0.1;
-  g.join(b, a);
-  step(g, 1);
-  b.startPos += 0.010; // slip 10 ms ahead
+const worstGap = (group, a, b, seconds, k = 1) => {
   let worst = 0;
-  let overshoot = 0;
-  for (let i = 0; i < 200; i++) {
-    step(g, 0.025);
-    const e = errBeats(b, a) * b.beatPeriod;
-    worst = Math.max(worst, Math.abs(e));
-    if (e < -0.0011) overshoot = Math.min(overshoot, e);
-  }
-  const end = errBeats(b, a) * b.beatPeriod;
-  check('10 ms slip corrected within 5 s', Math.abs(end) < 0.0011, `${(end * 1000).toFixed(2)} ms left`);
-  check('no overshoot', overshoot === 0, `${(overshoot * 1000).toFixed(2)} ms`);
-  check('trims stay inaudible (≤0.4%)', b.trims.every((x) => Math.abs(x) <= 0.004 + 1e-12));
-}
+  run(group, seconds, () => (worst = Math.max(worst, Math.abs(gapMs(a, b, k)))));
+  return worst;
+};
 
-// 6. Quantized seek keeps the beat phase.
+// ---- pressing Sync with both playing: tempo and beats at once, and they stay
 {
-  const g = mk();
-  const a = new FakeDeck(ctx, 'A', 128);
-  const b = new FakeDeck(ctx, 'B', 128);
-  a.play({ at: 10 });
-  b.play({ at: 10 });
-  ctx.currentTime += 0.1;
-  g.join(b, a);
-  const to = g.quantizeSeek(b, 95.31);
-  const ph = (p) => wrap(b.deckBeat(p));
-  check('quantizeSeek keeps phase', Math.abs(wrap(ph(to) - ph(b.position))) < 1e-9 && Math.abs(to - 95.31) <= b.beatPeriod / 2 + 1e-9);
-}
-
-// 7. Starting a cued (paused) synced deck: it comes in on the clock's beat, at its cue point.
-{
-  const g = mk();
-  const a = new FakeDeck(ctx, 'A', 128);
-  const b = new FakeDeck(ctx, 'B', 128, 0.2);
-  a.play({ at: 10.3 });
-  b.pausedPos = 0.2 + 32 * (60 / 128); // cued on a beat
-  ctx.currentTime += 0.1;
-  g.join(b, a);
-  b.pausedPos = 0.2 + 32 * (60 / 128); // re-cue after join moved it
-  ctx.currentTime += 3.7;
-  const plan = g.startPlan(b);
-  check('starts at its cue point', Math.abs(plan.at - b.pausedPos) < 1e-9);
-  check('cued on beat 1: waits at most one bar', plan.when - ctx.currentTime <= (4 * 60) / 128 + 0.03);
-  b.play(plan);
-  ctx.currentTime = plan.when + 0.5;
-  const bar = (x) => wrap(x.deckBeat(x.position) / 4);
-  check('lands on the bar', Math.abs(bar(b) - bar(a)) < 1e-6, (bar(b) - bar(a)).toFixed(6));
-  // Cued mid-bar on a beat: waits at most one beat.
-  b.pause();
-  b.pausedPos = 0.2 + 33 * (60 / 128);
-  const p2 = g.startPlan(b);
-  check('cued on beat 2: waits at most one beat', p2.when - ctx.currentTime <= 60 / 128 + 0.03);
-}
-
-// 8. Half tempo: a 64 BPM deck (k = ½) has its beat 1 lands on the clock's beat 1 (not the snare).
-{
-  const g = mk();
-  const a = new FakeDeck(ctx, 'A', 128);
-  const b = new FakeDeck(ctx, 'B', 64);
-  a.play({ at: 0 });
-  ctx.currentTime += 0.05;
-  b.pausedPos = 7.3;
-  g.join(b, a);
-  b.play(g.startPlan(b));
-  ctx.currentTime += 2;
-  const bb = b.deckBeat(b.position);
-  const ab = a.deckBeat(a.position);
-  check('half-tempo deck beats sit on every other clock beat', Math.abs(wrap(2 * bb - ab)) < 1e-6 || Math.abs(wrap(bb - ab / 2)) < 1e-6);
-}
-
-// 9. Nudge offset is kept.
-{
-  const g = mk();
-  const a = new FakeDeck(ctx, 'A', 128);
-  const b = new FakeDeck(ctx, 'B', 128);
-  a.play({ at: 10 });
-  b.play({ at: 10 });
-  ctx.currentTime += 0.1;
-  g.join(b, a);
-  b.startPos += 0.02; // the user nudged 20 ms ahead
-  g.keepOffset(b);
-  step(g, 5);
-  const e = errBeats(b, a) * b.beatPeriod;
-  check('nudged offset kept', Math.abs(e - 0.02) < 0.0005, `${(e * 1000).toFixed(2)} ms`);
-}
-
-// 10. Listening: a deck whose grid sits ¼ beat off its own kicks is moved so the kicks meet;
-// then a slow slip is pulled back by the live checks, a few ms at a time.
-{
-  // Onset envelopes (200 frames/s) with a hit every beat at the given phase (in beats).
-  const hits = (bpm, phase, seconds = 600) => {
-    const rate = 200, n = seconds * rate, env = new Float32Array(n), P = 60 / bpm;
-    for (let t = phase * P; t < seconds; t += P) for (let k = -3; k <= 3; k++) {
-      const i = Math.round(t * rate - 0.5) + k;
-      if (i >= 0 && i < n) env[i] += Math.exp(-k * k / 2);
-    }
-    return { env, bass: env, rate };
-  };
-  const g = mk();
-  const a = new FakeDeck(ctx, 'A', 128);
-  const b = new FakeDeck(ctx, 'B', 124);
-  a.onsets = hits(128, 0);
-  b.onsets = hits(124, 0.25); // B's kicks land a quarter beat after its grid's beats
+  const { group, decks: [a, b] } = setup(steady(126, 0.31), steady(120, 0.07));
   a.play({ at: 30 });
-  b.play({ at: 61.3 });
-  ctx.currentTime += 0.5;
-  g.join(b, a);
-  const res = g.listen(b);
-  // Where B's kicks sound relative to A's: B's kick phase minus A's beat phase.
-  const kickErr = () => wrap(b.deckBeat(b.position) - 0.25 - a.deckBeat(a.position));
-  check('listen finds the quarter-beat offset', res && Math.abs(res.beats - 0.25) < 0.02, res ? res.beats.toFixed(3) : 'none');
-  ctx.currentTime += 0.1;
-  check('kicks meet after listening', Math.abs(kickErr()) < 0.01, kickErr().toFixed(4));
-  check('no second move once aligned', g.listen(b) === null);
-  // Live: B's music slips 12 ms (as a drifting grid would); the checks pull it back gently.
-  b.onsets = hits(124, 0.25 + 0.012 / (60 / 124));
-  step(g, 30);
-  const ms = kickErr() * 60 / 124 * 1000 - 12;
-  check('live checks follow a 12 ms slip', Math.abs(ms) < 3, `${ms.toFixed(1)} ms left`);
-  check('live checks only trim', b.trims.every((x) => Math.abs(x) <= 0.004 + 1e-12));
-  // A user nudge is respected: no listening after it.
-  g.keepOffset(b);
-  check('no listening after a nudge', g.listen(b) === null);
+  b.play({ at: 41.3 });
+  run(group, 1);
+  const before = Math.abs(gapMs(b, a));
+  const res = group.join(b, a);
+  ctx.currentTime += 0.03;
+  check('sync: joins', res.ok && group.has(a) && group.has(b));
+  check('sync: the pressed deck takes the other deck\'s tempo, the other keeps its own', Math.abs(b.effectiveBpm - 126) < 1e-9 && a.rate === 1, `${b.effectiveBpm.toFixed(3)} BPM`);
+  check('sync: beats land together at once', Math.abs(gapMs(b, a)) < 0.01, `${before.toFixed(0)} ms apart before, ${Math.abs(gapMs(b, a)).toFixed(3)} ms after`);
+  check('sync: moved by half a beat at most, the other deck not at all', b.jumps === 1 && a.jumps === 0);
+  const worst = worstGap(group, b, a, 120);
+  check('sync: holds for two minutes without another jump', worst < 0.05 && b.jumps === 1 && a.jumps === 0, `worst ${worst.toFixed(3)} ms`);
 }
 
-if (fails) {
-  console.log(`${fails} sync test(s) failed`);
-  process.exit(1);
+// ---- half and double time
+{
+  const { group, decks: [a, b] } = setup(steady(174), steady(87.3, 0.1));
+  a.play({ at: 10 });
+  b.play({ at: 20 });
+  const res = group.join(b, a);
+  check('half time: an 87 BPM track syncs to 174 at half, not at +99%', res.k === 0.5 && Math.abs(b.effectiveBpm - 87) < 1e-9, `k ${res.k}, ${b.effectiveBpm.toFixed(2)} BPM`);
+  ctx.currentTime += 0.03;
+  check('half time: its beats land on every other beat', worstGap(group, b, a, 30, 0.5) < 0.05);
+  const { group: g2, decks: [c, d] } = setup(steady(87), steady(174, 0.1));
+  c.play({ at: 10 });
+  d.play({ at: 20 });
+  check('double time: a 174 BPM track syncs to 87 at double', g2.join(d, c).k === 2 && Math.abs(d.effectiveBpm - 174) < 1e-9);
+  d.forcedK = 1;
+  g2.leave(d);
+  check('a forced ratio overrides', g2.join(d, c, { forcedK: 1 }).k === 1 && Math.abs(d.effectiveBpm - 87) < 1e-9);
 }
-console.log('all sync tests passed');
+
+// ---- the tempo slider on either deck moves both
+{
+  const { group, decks: [a, b] } = setup(steady(126), steady(120));
+  a.play({ at: 30 });
+  b.play({ at: 40 });
+  group.join(b, a);
+  run(group, 2);
+  a.setRate(1.05);
+  group.setTempoFrom(a);
+  check('tempo: moving the lead deck moves the follower', Math.abs(b.effectiveBpm - 132.3) < 1e-6, `${b.effectiveBpm.toFixed(2)}`);
+  check('tempo: beats stay together through it', worstGap(group, b, a, 10) < 0.05);
+  b.setRate(b.rate * 0.97);
+  const moved = group.setTempoFrom(b);
+  check('tempo: moving the follower moves the lead deck', Math.abs(a.effectiveBpm - 132.3 * 0.97) < 1e-6 && moved.some((m) => m.deck === a));
+  check('tempo: beats stay together through that too', worstGap(group, b, a, 10) < 0.05 && a.jumps === 0);
+}
+
+// ---- starting a synced deck: at once, and on the beat
+{
+  const { group, decks: [a, b] } = setup(steady(126, 0.31), steady(120, 0.07));
+  a.play({ at: 30 });
+  b.pausedPos = b.grid.posAt(64); // cued on a beat
+  group.join(b, a);
+  check('paused deck: Sync leaves its cue where it is', Math.abs(b.pausedPos - b.grid.posAt(64)) < 1e-12);
+  run(group, 3.21);
+  const plan = group.startPlan(b);
+  b.play(plan);
+  check('start: at once', plan.when - ctx.currentTime <= 0.03);
+  check('start: within half a beat of the cue', Math.abs(b.grid.beatAt(plan.at) - 64) <= 0.5 + 1e-9, `${(b.grid.beatAt(plan.at) - 64).toFixed(3)} beats from it`);
+  ctx.currentTime = plan.when;
+  check('start: on the beat from its first sample', Math.abs(gapMs(b, a)) < 0.01);
+  check('start: stays there, no jumps', worstGap(group, b, a, 20) < 0.05 && b.jumps === 0);
+}
+
+// ---- nothing else playing: the deck starts from its cue and carries the clock
+{
+  const { group, decks: [a, b] } = setup(steady(126), steady(120));
+  a.pausedPos = 12.34;
+  b.pausedPos = 50;
+  group.join(b, a);
+  check('both paused: the pressed deck still takes the tempo', Math.abs(b.effectiveBpm - 126) < 1e-9);
+  const plan = group.startPlan(b);
+  b.play(plan);
+  check('first to start plays from its cue exactly', plan.at === 50);
+  run(group, 2);
+  a.play(group.startPlan(a));
+  ctx.currentTime += 0.03;
+  check('the second starts on the first one\'s beat', Math.abs(gapMs(a, b)) < 0.01 && worstGap(group, a, b, 10) < 0.05);
+}
+
+// ---- a band without a click: the follower's tempo wanders ±2.5%
+{
+  const { group, decks: [a, b] } = setup(steady(124), wandering(121, 0.025));
+  a.play({ at: 5 });
+  b.play({ at: 12 });
+  group.join(b, a);
+  ctx.currentTime += 0.03;
+  let lo = Infinity, hi = 0;
+  const worst = (() => { let w = 0; run(group, 150, () => { w = Math.max(w, Math.abs(gapMs(b, a))); lo = Math.min(lo, b.rate); hi = Math.max(hi, b.rate); }); return w; })();
+  check('wandering follower: stays on the beat for 150 s', worst < 1, `worst ${worst.toFixed(2)} ms`);
+  check('wandering follower: its speed is moved against the drift, not jumped', b.jumps === 1 && hi / lo > 1.04, `rate ${lo.toFixed(4)}…${hi.toFixed(4)}`);
+  check('wandering follower: heard tempo is the steady deck\'s', Math.abs(b.effectiveBpm - 124) < 0.02);
+}
+
+// ---- …and the lead deck's tempo wanders: the steady deck follows the band
+{
+  const { group, decks: [a, b] } = setup(wandering(98, 0.025), steady(100, 0.4));
+  a.play({ at: 8 });
+  b.play({ at: 3 });
+  group.join(b, a);
+  ctx.currentTime += 0.03;
+  const worst = worstGap(group, b, a, 150);
+  check('wandering lead: the follower stays on its beats for 150 s', worst < 1, `worst ${worst.toFixed(2)} ms`);
+  check('wandering lead: it plays untouched', a.rate === 1 && a.jumps === 0);
+}
+
+// ---- the lead deck stops or leaves: the other carries on undisturbed
+{
+  const { group, decks: [a, b, c] } = setup(steady(126), steady(120), steady(63));
+  a.play({ at: 30 });
+  b.play({ at: 40 });
+  c.play({ at: 20 });
+  group.join(b, a);
+  group.join(c, a);
+  ctx.currentTime += 0.03;
+  run(group, 5);
+  const jumps = [b.jumps, c.jumps];
+  a.pause();
+  const worst = worstGap(group, c, b, 20, 0.5);
+  check('lead paused: the others keep their tempo and stay together', Math.abs(b.effectiveBpm - 126) < 1e-9 && worst < 0.05 && b.jumps === jumps[0] && c.jumps === jumps[1], `worst ${worst.toFixed(3)} ms`);
+  a.play(group.startPlan(a));
+  ctx.currentTime += 0.03;
+  check('…and it comes back in on their beat', Math.abs(gapMs(a, b)) < 0.01);
+  group.leave(b);
+  run(group, 5);
+  check('a deck leaving a group of three leaves the other two synced', group.has(a) && group.has(c) && !group.has(b) && worstGap(group, c, a, 10, 0.5) < 0.05);
+  group.leave(a);
+  check('a pair is the smallest group', !group.has(c) && group.members.size === 0);
+}
+
+// ---- nudges stick, seeks keep the beat
+{
+  const { group, decks: [a, b] } = setup(steady(126), steady(120));
+  a.play({ at: 30 });
+  b.play({ at: 40 });
+  group.join(b, a);
+  ctx.currentTime += 0.03;
+  run(group, 2);
+  b.bend(0.04);
+  run(group, 0.5); // held for half a second: 20 ms ahead
+  b.bend(0);
+  group.keepOffset(b);
+  const nudged = gapMs(b, a);
+  const jumps = b.jumps;
+  run(group, 20);
+  check('nudge: the deck stays where it was nudged to', Math.abs(nudged - 20) < 1.5 && Math.abs(gapMs(b, a) - nudged) < 0.05 && b.jumps === jumps, `${gapMs(b, a).toFixed(2)} ms ahead`);
+  const to = group.quantizeSeek(b, 95.123);
+  check('seek on a synced deck lands in the same place in the beat', Math.abs(to - 95.123) <= b.grid.period / 2 + 1e-9);
+  b.jumpTo(to, ctx.currentTime);
+  check('…so it is still in sync afterwards', Math.abs(gapMs(b, a) - nudged) < 0.05);
+  // The lead deck jumps to a hot cue (on the beat): the clock goes with it, the follower is left alone.
+  const before = b.jumps;
+  a.jumpTo(group.quantizeSeek(a, 140.77), ctx.currentTime);
+  const worst = worstGap(group, b, a, 10);
+  check('lead deck seeks: the follower is not moved', b.jumps === before && Math.abs(worst - Math.abs(nudged)) < 0.1, `worst ${worst.toFixed(2)} ms`);
+}
+
+// ---- thrown off (a scratch): put back by a jump, once
+{
+  const { group, decks: [a, b] } = setup(steady(126), steady(120));
+  a.play({ at: 30 });
+  b.play({ at: 40 });
+  group.join(b, a);
+  ctx.currentTime += 0.03;
+  run(group, 2);
+  const jumps = b.jumps;
+  b.anchor(b.position + 0.1, ctx.currentTime); // 100 ms off
+  run(group, 1);
+  check('100 ms off: jumped back onto the beat, once', Math.abs(gapMs(b, a)) < 0.05 && b.jumps === jumps + 1);
+  b.anchor(b.position + 0.006, ctx.currentTime); // 6 ms off
+  run(group, 3);
+  check('6 ms off: trimmed back without a jump', Math.abs(gapMs(b, a)) < 0.25 && b.jumps === jumps + 1, `${gapMs(b, a).toFixed(3)} ms left`);
+}
+
+// ---- no tempo, no sync
+{
+  const { group, decks: [a, b] } = setup(steady(126), { title: 'no grid' });
+  check('a deck without a beat grid cannot join', group.join(b, a).ok === false && group.join(a, b).ok === false && group.members.size === 0);
+}
+
+console.log(fails ? `${fails} sync test(s) failed` : 'all sync tests passed');
+process.exit(fails ? 1 : 0);

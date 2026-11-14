@@ -4,3 +4,4 @@ out/
 vendor/
 models/
 *.onnx
+__pycache__/

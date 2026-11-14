@@ -14,7 +14,7 @@ STEMS  [ VOX ] [ DRUMS ] [ INST ]
 | **KEY readout** | The track's detected key in Camelot and normal notation (`8A Am`). When the key is shifted it shows the key you're actually hearing and by how much (`10A Bm +2`). Click it to reset the shift. |
 | **♭ / ♯** | Moves the key down or up one semitone **without changing tempo**. Range ±12. |
 | **LOCK** (key lock) | The tempo slider and nudge change speed only, not pitch. Without it, tempo works like vinyl as before: +6% tempo ≈ +1 semitone, and the readout shows that. |
-| **MATCH** | Shifts this deck into the other deck's key as you hear it (including the other deck's shift and tempo pitch), taking the smallest move (−6…+6). It aims for the same Camelot number, so a minor track can match a major one through its relative key (Am ↔ C). Turns LOCK on so the match holds when you change tempo. |
+| **MATCH** | Shifts this deck into a key that mixes with the other deck's as you hear it (including the other deck's shift and tempo pitch): the smallest shift that lands on the same Camelot number, or one number away when that saves more than a semitone (3 semitones at most). The notes both tracks play must agree too, and the tuning difference between the two records is taken out. Shift-click for the very same key. Turns LOCK on so the match holds when you change tempo. See `keyMatch()` in `src/renderer/key.js`. |
 | **VOX / DRUMS / INST** | Turns each stem of the deck on or off in real time. **Shift-click** solos one (Shift-click again to bring all back). **Right-click** turns all on. |
 | **Library → Key column** | Camelot + key for every analysed track. You can type `8A` or `Am` in the library filter to find tracks in a key. |
 
@@ -32,11 +32,12 @@ Keys are detected the first time a track is loaded, like BPM, and saved to the l
     - **Vocals** = harmonic part that's centre-panned (L ≈ R) in the 120 Hz–10 kHz voice range.
     - **Instruments** = everything else that's harmonic.
     With everything on and no shift, the frame passes through untouched, a bit-exact copy delayed by 2048 samples.
-- `src/renderer/engine.js`: the deck owns `keyShift`, `keyLock`, `stems`, `matchKeyTo()`, `pitchFactor`, `keyOffset`.
-- `src/renderer/analysis.js`: `detectKey()`, `chromagram()`, `camelot()`, `keyName()`, `transposeKey()`.
+- `src/renderer/engine.js`: the deck owns `keyShift`, `keyLock`, `stems`, `pitchFactor`, `keyOffset`.
+- `src/renderer/analysis.js`: `detectKey()`, `chromagram()` (reading the key and tuning from the audio).
+- `src/renderer/key.js`: everything about keys once they are read: `keyName()`, `camelot()`, `transposeKey()`, `keyRelation()`, `keyMatch()`.
   Krumhansl–Kessler key profiles with overtones folded in (as in Gómez's audio key-finding), so a note's
   3rd harmonic doesn't drag the result toward the dominant.
-- `src/renderer/app.js` / `index.html` / `styles.css`: the KEY and STEMS rows and the library Key column.
+- `src/renderer/ui/deck.js` / `index.html` / `styles.css`: the KEY and STEMS rows and the library Key column.
 - `src/main.js`: `key` added to the fields the library saves.
 
 ## Measured (tests run inside the exe)

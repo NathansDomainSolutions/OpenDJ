@@ -18,7 +18,7 @@ youtube.com. Everything else is split into the items below, to fix one at a time
 - `src/main.js`, `searchCreativeCommons()`: no CC filter (`sp=` removed from the URL), limit set by
   `SEARCH_LIMIT = 50`, and it returns `{ query, url, filter, limit, received, dropped, results, ms }` instead
   of a bare array. Each result has a `rank` (its position on YouTube).
-- `src/renderer/app.js`: `renderCcInfo()` draws the details strip. Cards show the rank, the length (red
+- `src/renderer/ui/search.js`: `renderCcInfo()` draws the details strip. Cards show the rank, the length (red
   when over 20 minutes), the video ID, and a two-line title.
 - `src/renderer/styles.css`: card layout fix (see #1), plus styles for the details strip.
 - `src/renderer/index.html`: the tab is renamed **YouTube search**, the dev-build note is one line, and there's

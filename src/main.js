@@ -635,25 +635,66 @@ function writeWav16(file, left, right) {
   fs.writeFileSync(file, buf);
 }
 
+// The GPU separator is one Python process kept running between tracks, with both models
+// loaded: starting Python, importing PyTorch and loading the models again for every track
+// cost more than the separation itself on a fast card. It is closed after ten idle minutes
+// (to give the video memory back) and when the app quits.
+const GPU_IDLE_MS = 10 * 60 * 1000;
+let gpuServer = null; // { proc, job, idle, tail }
+
+function stopGpuServer() {
+  if (!gpuServer) return;
+  clearTimeout(gpuServer.idle);
+  gpuServer.proc.kill();
+  gpuServer = null;
+}
+
+function startGpuServer(gpu) {
+  const script = process.env.CDJ_FAKE_STEMS_GPU || path.join(__dirname, 'stems-gpu.py').replace('app.asar', 'app.asar.unpacked'); // the fake is for tests
+  const proc = spawn(gpu.python, [script, '--serve', gpu.modelDir, gpu.vocalModel, gpu.splitModel], { windowsHide: true });
+  const server = { proc, job: null, idle: null, tail: '' };
+  let buffered = '';
+  proc.stdout.on('data', (d) => {
+    buffered += d;
+    const lines = buffered.split(/\r?\n/);
+    buffered = lines.pop();
+    for (const line of lines) {
+      const job = server.job;
+      if (!job) continue;
+      const m = /^PROGRESS (\d+) (\d+)/.exec(line);
+      if (m) mainWindow?.webContents.send('stems:progress', { trackId: job.id, done: Number(m[1]), total: Number(m[2]) });
+      else if (line === 'DONE') job.finish(null);
+      else if (line.startsWith('FAIL')) job.finish(new Error(`GPU separation failed: ${line.slice(5) || 'no reason given'}`));
+    }
+  });
+  proc.stderr.on('data', (d) => (server.tail = (server.tail + d).slice(-2000)));
+  const gone = (why) => {
+    if (gpuServer === server) gpuServer = null;
+    clearTimeout(server.idle);
+    server.job?.finish(new Error(`GPU separation failed (${why}): ${server.tail.trim().split('\n').pop() || 'no output'}`));
+  };
+  proc.on('error', (err) => gone(err.message));
+  proc.on('close', (code) => gone(`exit ${code}`));
+  return server;
+}
+
 function separateOnGpu(gpu, id, left, right) {
   const input = path.join(app.getPath('temp'), `cdj-stems-${id}.wav`);
   writeWav16(input, left, right);
-  const script = path.join(__dirname, 'stems-gpu.py').replace('app.asar', 'app.asar.unpacked');
+  const server = gpuServer || (gpuServer = startGpuServer(gpu));
+  clearTimeout(server.idle);
   return new Promise((resolve, reject) => {
-    const p = spawn(gpu.python, [script, input, stemDir(id), gpu.modelDir, gpu.vocalModel, gpu.splitModel], { windowsHide: true });
-    let err = '';
-    p.stdout.on('data', (d) => {
-      for (const m of String(d).matchAll(/PROGRESS (\d+) (\d+)/g)) {
-        mainWindow?.webContents.send('stems:progress', { trackId: id, done: Number(m[1]), total: Number(m[2]) });
-      }
-    });
-    p.stderr.on('data', (d) => (err = (err + d).slice(-2000)));
-    p.on('error', reject);
-    p.on('close', (code) => {
-      fs.rm(input, { force: true }, () => {});
-      if (code === 0 && cachedStems(id)) resolve({ device: 'cuda' });
-      else reject(new Error(`GPU separation failed (exit ${code}): ${err.trim().split('\n').pop() || 'no output'}`));
-    });
+    server.job = {
+      id,
+      finish(err) {
+        server.job = null;
+        fs.rm(input, { force: true }, () => {});
+        if (gpuServer === server) server.idle = setTimeout(stopGpuServer, GPU_IDLE_MS);
+        if (!err && cachedStems(id)) resolve({ device: 'cuda' });
+        else reject(err || new Error('GPU separation failed: the stems were not written.'));
+      },
+    };
+    server.proc.stdin.write(`${JSON.stringify({ input, out: stemDir(id) })}\n`, (err) => err && server.job?.finish(err));
   });
 }
 
@@ -764,7 +805,7 @@ function registerIpc() {
     const t = findTrack(id);
     if (!t) return null;
     const allowed = ['title', 'artist', 'bpm', 'beatOffset', 'beatsPerBar', 'downbeat', 'cues', 'duration', 'key',
-      'gridVersion', 'gridSource', 'keyVersion', 'chroma', 'bpmConfidence', 'gridRms', 'variable', 'bpmAlts', 'gridPrev'];
+      'gridVersion', 'gridSource', 'keyVersion', 'chroma', 'tuning', 'warp', 'bpmConfidence', 'gridRms', 'variable', 'bpmAlts', 'gridPrev'];
     for (const key of allowed) if (key in patch) t[key] = patch[key];
     saveLibrary();
     return publicTrack(t);
@@ -874,6 +915,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      backgroundThrottling: false, // a covered or minimised window must keep its timers: sync and the gate run on them
     },
   });
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
@@ -899,6 +941,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('before-quit', () => {
+  stopGpuServer();
   for (const c of activeDownloads.values()) c.abort();
   if (saveTimer) writeLibraryNow();
 });

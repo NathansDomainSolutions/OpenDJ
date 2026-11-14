@@ -67,7 +67,7 @@ Per 7.8 s model segment, after warm-up:
 | `src/main.js` | `stemSetup()` finds the model in `<userData>/models/` (or `<app>/models/`) and the runtime in `resources/ort/onnxruntime-node` (packaged) or `node_modules` (dev). One-at-a-time job queue. IPC `stems:status`, `stems:separate`, `stems:read`, `stems:progress` event. Removing a track also deletes its cached stems. |
 | `src/preload.js` | `cdj.stems.{status, separate, read, onProgress}`. |
 | `src/renderer/engine.js` | Every source now plays into `deck.bus` → fx worklet → EQ (one extra unity gain node). `setAiStems(buffers)` switches the deck to **four synced `AudioBufferSourceNode`s** (one per stem) through `aiGains`. Start, stop, seek, rate, nudge, loops and key shift/lock all apply to all four. When AI stems are active, VOX/DRUMS/INST drive `aiGains` (INST = bass + other) and the DSP masks in the worklet are switched off (all 1). Without AI stems, the DSP path is unchanged. |
-| `src/renderer/app.js` | After a track loads, `prepareAiStems()`: use the cache, or resample to 44.1 kHz (OfflineAudioContext), send the PCM to the worker, and show progress on the STEMS label. |
+| `src/renderer/ui/load.js` | After a track loads, `prepareAiStems()`: use the cache, or resample to 44.1 kHz (OfflineAudioContext), send the PCM to the worker, and show progress on the STEMS label. |
 | `deck-fx.worklet.js` | **Unchanged.** |
 
 ## Tested inside the exe

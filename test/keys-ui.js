@@ -66,7 +66,7 @@ function writeTrack(file, { bpm, chords, seconds = 40 }) {
 }
 const maj = (r) => [r, r + 12, r + 16, r + 19];
 const min = (r) => [r, r + 12, r + 15, r + 19];
-// Track 1: A minor (8A). Track 2: D minor (7A) — 5 semitones apart, MATCH should move B by −5... or +7 → wraps to −5.
+// Track 1: A minor (8A). Track 2: D minor (7A) — one step apart on the wheel, so MATCH leaves B where it is (Shift-click would move it −5).
 const t1 = path.join(tmp, 'Key Test - A minor 124.wav');
 const t2 = path.join(tmp, 'Key Test - D minor 120.wav');
 writeTrack(t1, { bpm: 124, chords: [min(57), maj(53), maj(48), maj(55), min(57), min(50), maj(52), min(57)] });

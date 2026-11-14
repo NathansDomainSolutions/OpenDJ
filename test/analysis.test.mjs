@@ -1,4 +1,6 @@
-import { detectTempo, fitGridAt, analyzeTrack, ANALYSIS_VERSION, detectMeter, computeWaveform, overview, mixToMono, beatPhase, detectKey, keyName, camelot, transposeKey, bestKeyShift, beatSalience, onsetEnvelope } from '../src/renderer/analysis.js';
+import { detectTempo, fitGridAt, analyzeTrack, ANALYSIS_VERSION, detectMeter, computeWaveform, overview, mixToMono, beatPhase, detectKey, keyName, camelot, transposeKey } from '../src/renderer/analysis.js';
+import { keyMatch } from '../src/renderer/key.js';
+import { BeatGrid } from '../src/renderer/beatgrid.js';
 let sr = 44100;
 let seed = 1; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1;
 // Drum voices; each starts its attack at the given sample, so the true beat time is exact.
@@ -48,7 +50,7 @@ let fails = 0;
 const check = (ok, msg) => { if (!ok) fails++; console.log(`${ok ? 'PASS' : 'FAIL'} ${msg}`); };
 const wrap = (x, P) => { let d = ((x % P) + P) % P; if (d > P / 2) d -= P; return d; };
 const fmt = (r) => r ? `${r.bpm} bpm, offset ${r.offset.toFixed(4)}, conf ${r.confidence.toFixed(2)}, rms ${r.gridRms.toFixed(1)} ms, alts ${r.alts.map((a) => a.bpm).join('/')}` : 'null';
-check(ANALYSIS_VERSION === 2, 'ANALYSIS_VERSION is 2');
+check(ANALYSIS_VERSION === 3, 'ANALYSIS_VERSION is 3');
 
 // --- tempo and grid: BPM within 0.005, first beat within 2 ms, at both sample rates the app
 // has used. levels: accepted multiples of the true tempo (×½ only where stated).
@@ -89,26 +91,23 @@ for (const rate of [44100, 48000]) {
 sr = 44100;
 check(slowest < 1000, `detectTempo slowest synthetic case ${slowest.toFixed(0)} ms`);
 
-// --- live drift: 106 → 113 BPM over 150 s. Flagged variable; the deviation curve brings
-// the beats back within 5 ms rms.
+// --- live drift: 106 → 113 BPM over 150 s, and a band wandering ±2.5% around 120. Flagged
+// variable; with the tempo map (warp) the grid's beats sit on the real ones within 5 ms rms.
 for (const rate of [44100, 48000]) {
   sr = rate;
-  seed = 1;
-  const beats = [];
-  for (let t = 0.123; t < 150; t += 60 / (106 + (7 * t) / 150)) beats.push(t);
-  const r = detectTempo(synth({ seconds: 150, pattern: house, beats }), sr);
-  let rms = NaN;
-  if (r?.dev) {
-    const P = 60 / r.bpm, d = r.dev.d;
-    const devAt = (k) => { const x = k / r.dev.step, i = Math.max(0, Math.min(d.length - 2, Math.floor(x))), u = Math.max(0, Math.min(1, x - i)); return (d[i] * (1 - u) + d[i + 1] * u) / 1000; };
-    const err = beats.filter((t) => t > 2 && t < 148).map((t) => {
-      let k = Math.round((t - r.offset) / P);
-      for (let it = 0; it < 3; it++) k = Math.round((t - r.offset - devAt(k)) / P);
-      return t - (r.offset + k * P + devAt(k));
-    });
-    rms = Math.sqrt(err.reduce((s, e) => s + e * e, 0) / err.length) * 1000;
+  for (const [name, tempoAt] of [['drift 106→113', (t) => 106 + (7 * t) / 150], ['wander 120 ±2.5%', (t) => 120 * (1 + 0.018 * Math.sin((2 * Math.PI * t) / 47) + 0.01 * Math.sin((2 * Math.PI * t) / 13 + 1))]]) {
+    seed = 1;
+    const beats = [];
+    for (let t = 0.123; t < 150; t += 60 / tempoAt(t)) beats.push(t);
+    const r = detectTempo(synth({ seconds: 150, pattern: house, beats }), sr);
+    let rms = NaN;
+    if (r?.warp) {
+      const grid = new BeatGrid({ bpm: r.bpm, beatOffset: r.offset, warp: r.warp });
+      const err = beats.filter((t) => t > 4 && t < 146).map((t) => t - grid.nearest(t));
+      rms = Math.sqrt(err.reduce((s, e) => s + e * e, 0) / err.length) * 1000;
+    }
+    check(r?.variable === true && rms <= 5, `${(sr / 1000).toFixed(1)}k ${name}: variable ${r?.variable}, steady ${r?.steady}, ${r?.bpm} bpm, beat rms with the tempo map ${rms.toFixed(2)} ms`);
   }
-  check(r?.variable === true && rms <= 5, `${(sr / 1000).toFixed(1)}k drift 106→113: variable ${r?.variable}, ${r?.bpm} bpm, beat rms after dev ${rms.toFixed(2)} ms`);
 }
 sr = 44100;
 
@@ -175,25 +174,16 @@ for (const c of keyCases) {
   console.log(`INFO key of drums only: ${r ? keyName(r.key) + ' conf ' + r.confidence.toFixed(2) : 'none'} (any answer here is a guess; low confidence expected)`);
 }
 {
-  // Match by ear: Eb major against C major should move down 3 (or up to the relative key,
-  // never further); against the other deck playing +0.3 detuned, the fine part follows.
-  const ch = (chords) => detectKey(progression(chords), sr).chroma;
+  // Key match by ear (no key names): Eb major against C major moves down 3; A minor already
+  // shares C major's notes; against the other deck playing +0.3 detuned, the fine part follows.
+  const ch = (chords) => ({ chroma: detectKey(progression(chords), sr).chroma });
   const cMaj = ch(keyCases[0].chords), ebMaj = ch(keyCases[3].chords), aMin = ch(keyCases[1].chords);
-  const r1 = bestKeyShift(ebMaj, cMaj);
-  const r2 = bestKeyShift(aMin, cMaj);
-  const r3 = bestKeyShift(ebMaj, cMaj, 0.3);
+  const r1 = keyMatch(ebMaj, cMaj);
+  const r2 = keyMatch(aMin, cMaj);
+  const r3 = keyMatch(ebMaj, { ...cMaj, offset: 0.3 });
   const ok = r1.shift === -3 && r1.fit > r1.fitNow && r2.shift === 0 && Math.abs(r3.shift + 2.7) < 1e-9;
   if (!ok) fails++;
   console.log(`${ok ? 'PASS' : 'FAIL'} key match by chroma: Eb→C ${r1.shift} (fit ${r1.fit.toFixed(2)}, was ${r1.fitNow.toFixed(2)}), Am→C ${r2.shift}, detuned ${r3.shift.toFixed(2)}`);
-}
-{
-  // Beat salience: the true grid sits firmer than a ⅔-speed or a shifted one.
-  const m = synth({ bpm: 126, offset: 0.1, seconds: 40, pattern: house, drone: false });
-  const o = onsetEnvelope(m, sr);
-  const t = beatSalience(o, 126, 0.1), slow = beatSalience(o, 84, 0.1), off = beatSalience(o, 126, 0.1 + 30 / 126);
-  const ok = t > slow * 1.1 && t > off * 1.5;
-  if (!ok) fails++;
-  console.log(`${ok ? 'PASS' : 'FAIL'} beat salience: true ${t.toFixed(2)}, ⅔ speed ${slow.toFixed(2)}, ¼ beat off ${off.toFixed(2)}`);
 }
 const camelotChecks = [[0, '8B'], [9 + 12, '8A'], [7, '9B'], [4 + 12, '9A'], [5, '7B'], [6 + 12, '11A'], [3, '5B']];
 for (const [k, want] of camelotChecks) {

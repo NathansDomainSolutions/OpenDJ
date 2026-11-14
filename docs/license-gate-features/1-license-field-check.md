@@ -54,7 +54,7 @@ license: verdict.license,
 licenseCheckedBy: verdict.how,
 ```
 
-Renderer side (`src/renderer/app.js`): status text said "Checking license…" and "Checking…". `shortLicense()`
+Renderer side (`src/renderer/ui/search.js`, `ui/core.js`): status text said "Checking license…" and "Checking…". `shortLicense()`
 returned `'CC'` when there was no license, and `attribution()` fell back to `'Creative Commons'`. The note in
 `index.html` said every download is license-checked.
 
