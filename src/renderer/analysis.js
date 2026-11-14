@@ -78,10 +78,18 @@ export function overview(wave, columns) {
   return { peak: out, ...bands };
 }
 
+import { gridHolds, followPulse } from './warp.js';
+import { keyName, camelot, transposeKey } from './key.js';
+
+export { keyName, camelot, transposeKey }; // key names live in key.js; kept here for older imports
+
+// Below this (see gridHolds) one constant grid doesn't describe the track, and its beats are followed instead.
+const STEADY_MIN = 0.5;
+
 const TARGET_ENV_RATE = 200; // onset envelope frames per second (approx.)
 
 /** Bumped when the grid maths change, so the app knows which stored grids to re-analyse. */
-export const ANALYSIS_VERSION = 2;
+export const ANALYSIS_VERSION = 3;
 /** Bumped when key detection changes, so stored keys (and chroma) are found again. */
 export const KEY_VERSION = 4;
 
@@ -162,30 +170,6 @@ export function onsetEnvelope(mono, sampleRate) {
   return { env: detrend(env, win), bass: detrend(bass, win), rate: ENV_RATE };
 }
 
-/**
- * How firmly a beat grid sits on the music: the mean of the strongest onset (bass-weighted)
- * within ±25 ms of each beat, over the mean onset level, across the middle 80% of the track.
- * A reading at the wrong level misses beats and scores lower. o = onsetEnvelope(...).
- */
-export function beatSalience(o, bpm, offset) {
-  const n = o.env.length;
-  if (!(bpm > 0) || !n) return 0;
-  const lv = (i) => (i >= 0 && i < n ? o.bass[i] + 0.5 * o.env[i] : 0);
-  let mean = 0;
-  for (let i = 0; i < n; i++) mean += lv(i) / n;
-  const P = 60 / bpm;
-  const w = Math.round(0.025 * o.rate);
-  const dur = n / o.rate;
-  let s = 0;
-  let k = 0;
-  for (let t = offset + Math.ceil((dur * 0.1 - offset) / P) * P; t < dur * 0.9; t += P, k++) {
-    const c = Math.round(t * o.rate - 0.5);
-    let m = 0;
-    for (let j = -w; j <= w; j++) m = Math.max(m, lv(c + j));
-    s += m;
-  }
-  return k && mean > 0 ? s / k / mean : 0;
-}
 
 function sampleEnv(env, pos) {
   const i = Math.floor(pos);
@@ -254,15 +238,30 @@ function meanOf(x, from, to) {
 
 /** Envelopes and the analysis window shared by every tempo step, or null if too short. */
 function analysisContext(mono, sampleRate) {
-  const duration = mono.length / sampleRate;
-  if (duration < 8) return null;
+  if (mono.length / sampleRate < 8) return null;
   const onset = onsetEnvelope(mono, sampleRate);
-  const R = onset.rate;
-  const env = smooth(onset.env, 2);
-  const bass = smooth(onset.bass, 1);
+  return contextOf(smooth(onset.env, 2), smooth(onset.bass, 1), onset.rate);
+}
+
+/** The same, from envelopes already made (R frames per second). `only`: read just the busiest that many seconds. */
+function contextOf(env, bass, R, only = 0) {
+  const duration = env.length / R;
   // Skip intro and outro; two minutes is plenty for the periodicity.
-  const from = Math.floor(duration * 0.15 * R);
-  const to = Math.floor(Math.min(duration * 0.15 + 120, duration * 0.9) * R);
+  let from = Math.floor(duration * 0.15 * R);
+  let to = Math.floor(Math.min(duration * 0.15 + 120, duration * 0.9) * R);
+  if (only && to - from > only * R) {
+    // The busiest stretch of that length.
+    const w = Math.round(only * R);
+    let acc = 0;
+    for (let f = from; f < from + w; f++) acc += env[f];
+    let best = acc, at = from;
+    for (let f = from + w; f < to; f++) {
+      acc += env[f] - env[f - w];
+      if (acc > best) { best = acc; at = f + 1 - w; }
+    }
+    from = at;
+    to = at + w;
+  }
   // The grid fit starts from the busiest 40 s of the window, not a breakdown.
   const w = Math.min(to - from, Math.round(40 * R));
   let acc = 0;
@@ -442,86 +441,6 @@ function measureBlocks(c, a, b, span) {
   return out;
 }
 
-/**
- * Follow the beat block by block outwards from the constant fit's inlier nearest beat 0,
- * each block searching ±40 ms around where the previous one predicts it and ±2% in
- * period (a drifting block smears at a fixed period), for tempos that drift.
- */
-function trackBlocks(c, g) {
-  if (!g.blocks.length) return [];
-  const start = g.blocks.reduce((x, y) => (y.w > x.w ? y : x));
-  const out = [];
-  for (const dir of [1, -1]) {
-    let t = start.t;
-    let per = g.b;
-    let wRef = start.w;
-    for (let n = dir > 0 ? start.n : start.n - 8; ; n += 8 * dir) {
-      const s = dir > 0 ? t : t - 8 * per;
-      if (s < 0 || s + 8 * per >= c.env.length) break;
-      const search = (tol) => {
-        let best = null;
-        for (let e = -0.02; e <= 0.0201; e += 0.0025) {
-          const q = per * (1 + e);
-          // Going backwards the block is anchored at its end, where the last one started.
-          const x = measureBlock(c, dir > 0 ? s : s + 8 * (per - q), q, tol);
-          if (!best || x.w > best.w) best = { ...x, per: q };
-        }
-        return best;
-      };
-      let m = search(40);
-      // Much weaker than the chain so far: it slid onto off-beats; re-find the beat.
-      if (m.w < 0.5 * wRef) {
-        const wide = search(Math.round((500 * per) / c.R));
-        if (wide.w > m.w) m = { ...wide, interior: true };
-      }
-      const ok = m.w > 0 && m.interior;
-      const mp = m.per;
-      if (ok) {
-        per = mp;
-        wRef = 0.8 * wRef + 0.2 * m.w;
-      }
-      t = ok ? m.t : s;
-      if (dir > 0) t += 8 * per;
-      out.push({ n, ...m });
-    }
-  }
-  // A drifting tempo smears the constant fit's half-beat choice: redo it on the chain.
-  let on = 0, off = 0;
-  for (const k of out) {
-    for (let j = 0; j < 8; j++) {
-      on += sampleEnv(c.bass, k.t + j * k.per);
-      off += sampleEnv(c.bass, k.t + (j + 0.5) * k.per);
-    }
-  }
-  if (off > on) for (const k of out) k.t += k.per / 2;
-  return out.sort((x, y) => x.n - y.n);
-}
-
-/**
- * For grids that fit loosely: track the beat, fit a line through the tracked blocks and
- * keep the deviation from it when that explains the misfit and leaves the ±25 ms band
- * (a live drummer). Returns null or { a, b, blocks, dev } with dev in frames per block.
- */
-function driftGrid(c, g) {
-  const blocks = trackBlocks(c, g).filter((k) => k.w > 0 && k.interior);
-  if (blocks.length < 8) return null;
-  let sw = 0, sn = 0, st = 0, snn = 0, snt = 0;
-  for (const k of blocks) {
-    sw += k.w; sn += k.w * k.n; st += k.w * k.t; snn += k.w * k.n * k.n; snt += k.w * k.n * k.t;
-  }
-  const b = (sw * snt - sn * st) / (sw * snn - sn * sn);
-  const a = (st - b * sn) / sw;
-  const res = blocks.map((k) => k.t - a - k.n * b);
-  const dev = res.map((_, j) => [res[Math.max(0, j - 1)], res[j], res[Math.min(res.length - 1, j + 1)]].sort((x, y) => x - y)[1]);
-  let sr = 0, peak = 0;
-  blocks.forEach((k, j) => {
-    sr += k.w * (res[j] - dev[j]) ** 2;
-    peak = Math.max(peak, Math.abs(dev[j]));
-  });
-  if (Math.sqrt(sr / sw) > 0.5 * g.rms || peak < 0.025 * c.R) return null;
-  return { a, b, blocks, dev };
-}
-
 /** Robust weighted LS of block times: 3 passes, dropping |residual| > tol. */
 function solveGrid(blocks, a0, b0, tol) {
   const voters = blocks.filter((k) => k.w > 0);
@@ -580,30 +499,6 @@ function finishGrid(c, g) {
   return { bpm, offset: ((t % period) + period) % period, gridRms: (g.rms / R) * 1000 };
 }
 
-/**
- * A drifting track's stored grid: its average tempo (never rounded) and first beat, plus
- * dev = { step: 8, d } — ms by which beat 8·i (counted from offset) is late against it.
- */
-function driftResult(c, { a, b, blocks, dev }) {
-  const { R } = c;
-  const bpm = Math.round(((60 * R) / b) * 1e4) / 1e4;
-  const period = 60 / bpm;
-  const t = (a + 0.5) / R + ONSET_BIAS;
-  const offset = ((t % period) + period) % period;
-  const n0 = Math.round((t - offset) / period); // beat index of block n = 0
-  const xs = blocks.map((k) => k.n + n0); // each tracked block is timed at its first beat
-  const count = Math.floor((c.env.length / R - offset) / period / 8) + 1;
-  const d = [];
-  // Linear between tracked blocks, extrapolated past the first and last one.
-  for (let i = 0, j = 0; i < count; i++) {
-    const x = 8 * i;
-    while (j + 2 < xs.length && xs[j + 1] < x) j++;
-    const u = (x - xs[j]) / (xs[j + 1] - xs[j]);
-    d.push(Math.round(((dev[j] + (dev[j + 1] - dev[j]) * u) / R) * 1000));
-  }
-  return { bpm, offset, dev: { step: 8, d } };
-}
-
 const RELATIVES = [2, 0.5, 3 / 2, 2 / 3, 4 / 3, 3 / 4, 5 / 4, 4 / 5];
 const sameOctave = (x, y) => {
   const l = Math.abs(Math.log2(x / y));
@@ -614,14 +509,34 @@ const octavePrior = (bpm) => Math.exp(-0.5 * Math.log2(bpm / 120) ** 2);
 
 /**
  * Detect tempo and beat grid. Returns null for too-short or pulseless audio, else
- * { bpm, offset, confidence, gridRms, inliers, variable, dev, alts: [{ bpm, offset, rel }] }
- * with offset the first beat in seconds (0 ≤ offset < 60/bpm), gridRms in ms, dev null or
- * { step: 8, d: ms[] } (see driftResult), and alts the next two non-octave tempo levels
- * (×4/3, ×3/4, ×5/4, ×4/5) for the user to pick when ours is wrong.
+ * { bpm, offset, confidence, gridRms, inliers, steady, variable, warp, alts: [{ bpm, offset, rel }] }
+ * with offset the first beat in seconds (0 ≤ offset < 60/bpm), gridRms in ms, steady how
+ * well one constant grid holds over the whole track (0…1), warp null or the tempo map of a
+ * track that wanders (see warp.js; bpm is then its average tempo), and alts the next two
+ * non-octave tempo levels (×4/3, ×3/4, ×5/4, ×4/5) for the user to pick when ours is wrong.
  */
-export function detectTempo(mono, sampleRate, { minBpm = 70, maxBpm = 190 } = {}) {
+export function detectTempo(mono, sampleRate, range = {}) {
   const c = analysisContext(mono, sampleRate);
-  if (!c) return null;
+  const first = c && readTempo(c, range);
+  if (!first) return null;
+  // One steady tempo? Then that's the answer.
+  const steady = Math.round(gridHolds(c, first.g.b, first.g.a) * 100) / 100;
+  if (steady >= STEADY_MIN) return { ...first.result, steady, variable: false, warp: null };
+  // No: a constant grid doesn't hold along this track. Read the tempo again where it is
+  // steadiest for a while (the busiest 24 s: over minutes the drift blurs the evidence),
+  // follow the beats from there, and take the drift out. What is left has a steady tempo, so
+  // the usual reading applies to it, with the same choice of level and of which hit is the beat.
+  const local = readTempo(contextOf(c.env, c.bass, c.R, 24), range) || first;
+  // The same tempo, a little off: the whole-track reading is the better average to start from.
+  const start = Math.abs(local.g.b / first.g.b - 1) < 0.06 ? first : local;
+  const pulse = followPulse(c, start.g.b);
+  const final = pulse && readTempo(contextOf(pulse.unwarp(c.env), pulse.unwarp(c.bass), c.R), range);
+  if (!final) return { ...first.result, steady, variable: false, warp: null };
+  return { ...final.result, steady, variable: true, warp: pulse.warp(c.R) };
+}
+
+/** The tempo reading of one set of envelopes: { g: the grid fit (frames), result } or null. */
+function readTempo(c, { minBpm = 70, maxBpm = 190 } = {}) {
   const { peaks, score } = tempoScores(c);
   if (!peaks.length) return null;
 
@@ -672,9 +587,7 @@ export function detectTempo(mono, sampleRate, { minBpm = 70, maxBpm = 190 } = {}
   const chosen = octaveOf(best) || best;
   const g = fits.get(chosen);
   if (!(g.inl > 0)) return null;
-  let grid = finishGrid(c, g);
-  const drift = g.rms > 0.009 * c.R || g.inl < 0.75 ? driftGrid(c, g) : null;
-  if (drift) grid = { ...driftResult(c, drift), gridRms: grid.gridRms };
+  const grid = finishGrid(c, g);
 
   // Alternatives: the non-octave ratios a periodicity method confuses (triplet feels, 3-3-2,
   // dotted rhythms), strongest first, each offered as that ratio of ours (×4/3, not ×2/3).
@@ -695,18 +608,7 @@ export function detectTempo(mono, sampleRate, { minBpm = 70, maxBpm = 190 } = {}
   const S2 = levels.length ? levelS(levels[0]) : 0;
   const confidence = g.inl * Math.max(0, Math.min(1, (Sb - S2) / Sb));
 
-  return {
-    bpm: grid.bpm,
-    offset: grid.offset,
-    confidence,
-    gridRms: grid.gridRms,
-    inliers: g.inl,
-    // A loose constant fit (live band, tempo changes) even when no deviation curve could be
-    // trusted; with a curve the average tempo is stored and dev follows the drift.
-    variable: !!drift || g.inl < 0.7,
-    dev: grid.dev || null,
-    alts,
-  };
+  return { g, result: { bpm: grid.bpm, offset: grid.offset, confidence, gridRms: grid.gridRms, inliers: g.inl, alts } };
 }
 
 /**
@@ -754,26 +656,6 @@ const MINOR_PROFILE = withOvertones(KK_MINOR);
  * Keys are numbers 0–23: tonic pitch class (C = 0) + 12 for minor.
  * keyName(9 + 12) → 'Am', camelot(9 + 12) → '8A'.
  */
-export function keyName(key) {
-  if (key == null || key < 0) return '';
-  return PITCH_NAMES[key % 12] + (key >= 12 ? 'm' : '');
-}
-
-export function camelot(key) {
-  if (key == null || key < 0) return '';
-  const minor = key >= 12;
-  const tonic = key % 12;
-  const relMajor = minor ? (tonic + 3) % 12 : tonic; // A minor ↔ C major
-  return `${(((relMajor * 7) % 12) + 7) % 12 + 1}${minor ? 'A' : 'B'}`;
-}
-
-/** Key moved by a number of semitones (rounded). */
-export function transposeKey(key, semitones) {
-  if (key == null || key < 0) return key;
-  const tonic = (((key % 12) + Math.round(semitones)) % 12 + 12) % 12;
-  return tonic + (key >= 12 ? 12 : 0);
-}
-
 function fftInPlace(re, im) {
   const n = re.length;
   for (let i = 1, j = 0; i < n; i++) {
@@ -955,35 +837,7 @@ export function detectKey(mono, sampleRate) {
   return { key: best.key, confidence, scores: scores.slice(0, 4), chroma: Array.from(chroma, (v) => Math.round((v / total) * 1e4) / 1e4), tuning: Math.round(tuning * 100) / 100 };
 }
 
-/** Chroma moved up by s semitones. */
-const rotateChroma = (ch, s) => Array.from({ length: 12 }, (_, i) => ch[(((i - s) % 12) + 12) % 12]);
 
-/**
- * How well one track's notes agree with another's at each key shift, by comparing what the
- * two actually play (their chroma), not their key names: [{ shift, fit }] for `mine` moved
- * −6…+6 semitones against `theirs` moved `theirShift` (whole semitones). fit = chroma
- * correlation, −1…1.
- */
-export function keyShiftFits(mine, theirs, theirShift = 0) {
-  const heard = rotateChroma(theirs, theirShift);
-  return Array.from({ length: 13 }, (_, i) => ({ shift: i - 6, fit: correlate(rotateChroma(mine, i - 6), heard) }));
-}
-
-/**
- * The key shift where two tracks' notes agree best (see keyShiftFits). `theirOffset` is how
- * far the other deck already plays from its own key (semitones, may be fractional); the
- * answer matches its fine detune too. Small moves win ties: each semitone costs 0.01 in fit.
- * Returns { shift, fit, fitNow } or null.
- */
-export function bestKeyShift(mine, theirs, theirOffset = 0, myOffset = 0) {
-  if (!mine?.length || !theirs?.length) return null;
-  const whole = Math.round(theirOffset);
-  const fits = keyShiftFits(mine, theirs, whole);
-  const score = (c) => c.fit - 0.01 * Math.abs(c.shift);
-  const best = fits.reduce((a, b) => (score(b) > score(a) ? b : a));
-  const now = Math.max(-6, Math.min(6, Math.round(myOffset)));
-  return { shift: best.shift + (theirOffset - whole), fit: best.fit, fitNow: fits[now + 6].fit };
-}
 
 /**
  * Time signature and downbeat, given a beat grid. Each beat gets two cues for
@@ -1081,8 +935,9 @@ export function beatPhase(position, bpm, offset) {
 }
 
 /** Everything the app stores for a track, in one call (what analysis-worker.js runs). */
-export function analyzeTrack(mono, sampleRate) {
+export function analyzeTrack(mono, sampleRate, { key = true } = {}) {
   const tempo = detectTempo(mono, sampleRate);
-  const meter = tempo ? detectMeter(mono, sampleRate, tempo.bpm, tempo.offset) : null;
-  return { tempo, meter, key: detectKey(mono, sampleRate) };
+  // The meter is read off a constant grid in track time: not for a track whose tempo wanders.
+  const meter = tempo && !tempo.warp ? detectMeter(mono, sampleRate, tempo.bpm, tempo.offset) : null;
+  return { tempo, meter, key: key ? detectKey(mono, sampleRate) : undefined };
 }

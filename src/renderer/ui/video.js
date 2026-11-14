@@ -37,7 +37,7 @@ async function getVideo(name) {
 }
 
 /** How loud a deck is in the mix right now (0…1): fader × crossfader, 0 when stopped. */
-export const loudness = (n) => {
+const loudness = (n) => {
   const deck = mixer.decks[n];
   return deck.playing ? deck.fader.gain.value * deck.xfade.gain.value : 0;
 };

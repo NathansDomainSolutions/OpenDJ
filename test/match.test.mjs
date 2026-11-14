@@ -1,7 +1,9 @@
 // Tempo match, key fit, Key Match tuning and the beat-match meter. Run: node test/match.test.mjs
-import { tempoMatch, wheel, wheelSteps, keyRelation, mixFit, keyMatch } from '../src/renderer/match.js';
+import { tempoMatch, mixFit } from '../src/renderer/match.js';
+import { wheel, wheelSteps, keyRelation, keyMatch, camelot, transposeKey } from '../src/renderer/key.js';
+import { BeatGrid } from '../src/renderer/beatgrid.js';
 import { beatGap } from '../src/renderer/sync.js';
-import { detectKey, camelot, transposeKey } from '../src/renderer/analysis.js';
+import { detectKey } from '../src/renderer/analysis.js';
 
 let fails = 0;
 function check(name, ok, detail = '') {
@@ -139,11 +141,10 @@ const min = (r) => [r, r + 12, r + 15, r + 19];
 
 // ---- beat-match meter: how far one deck's beats are from another's
 {
-  const deck = (bpm, speed, pos, offset = 0) => ({
-    bpm, speed, beatPeriod: 60 / bpm,
-    positionAt: (t) => pos + t * speed,
-    deckBeat: (p) => (p - offset) / (60 / bpm),
-  });
+  const deck = (bpm, speed, pos, offset = 0) => {
+    const grid = new BeatGrid({ bpm, beatOffset: offset });
+    return { grid, speed, effectiveBpm: bpm * speed, positionAt: (t) => pos + t * speed };
+  };
   const a = deck(120, 1, 10); // on a beat at t = 0
   check('together: 0', near(beatGap(deck(120, 1, 4), a, 0), 0, 1e-9));
   check('20 ms ahead', near(beatGap(deck(120, 1, 4.02), a, 0), 0.02, 1e-9));
@@ -153,6 +154,24 @@ const min = (r) => [r, r + 12, r + 15, r + 19];
   check('double time lines up with every beat', near(beatGap(deck(240, 1, 4), a, 0), 0, 1e-9) && near(beatGap(deck(240, 1, 4.01), a, 0), 0.01, 1e-9));
   check('half time lines up on the other deck\'s beats', near(beatGap(deck(60, 1, 4), a, 0), 0, 1e-9) && near(beatGap(deck(60, 1, 4.03), a, 0), 0.03, 1e-9));
   check('never more than half a beat', Math.abs(beatGap(deck(120, 1, 4.3), a, 0)) <= 0.25 + 1e-9);
+}
+
+// ---- beat grid with a tempo map: beats where the music is, and maths that round-trips
+{
+  // A track that runs 2% fast for its first 40 s, then 2% slow: musical time gains 0.8 s, then loses it.
+  const d = [];
+  for (let pos = 0; pos <= 82; pos += 2) d.push(Math.round((pos <= 40 ? 0.02 * pos : 0.8 - 0.02 * (pos - 40)) * 1e4) / 10);
+  const g = new BeatGrid({ bpm: 120, beatOffset: 0, warp: { step: 2, d } });
+  check('no warp: beats are evenly spaced in track time', near(new BeatGrid({ bpm: 120, beatOffset: 0.25 }).posAt(7), 3.75, 1e-12));
+  check('fast section: beats come sooner', near(g.posAt(40), 20 / 1.02, 1e-6), `beat 40 at ${g.posAt(40).toFixed(4)} s`);
+  check('local tempo follows the map', near(g.bpmAt(10), 122.4, 1e-6) && near(g.bpmAt(60), 117.6, 1e-6));
+  check('the map ends where it began: last beats back on the steady pulse', near(g.posAt(160), 80, 1e-6));
+  let worst = 0;
+  for (let p = 0.1; p < 80; p += 0.37) worst = Math.max(worst, Math.abs(g.posAt(g.beatAt(p)) - p));
+  check('position → beat → position round-trips', worst < 1e-9, `${worst.toExponential(1)} s`);
+  check('nearest beat', near(g.nearest(g.posAt(12) + 0.1), g.posAt(12), 1e-9));
+  const t = { bpm: 120, beatOffset: 0 };
+  check('one grid object per track until its grid changes', BeatGrid.of(t) === BeatGrid.of(t) && BeatGrid.of(Object.assign(t, { bpm: 60 })).bpm === 60 && BeatGrid.of({ title: 'no tempo' }) === null && !Object.keys(t).includes('_grid'));
 }
 
 console.log(fails ? `${fails} match test(s) failed` : 'all match tests passed');

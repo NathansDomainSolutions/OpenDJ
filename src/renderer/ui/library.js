@@ -1,6 +1,6 @@
 // The library table: filter, sort, and marks for what mixes well with the deck on air.
-import { keyName, camelot } from '../analysis.js';
-import { mixFit, wheel, hasKey } from '../match.js';
+import { keyName, camelot, wheel, hasKey } from '../key.js';
+import { mixFit } from '../match.js';
 import { api, $, $$, mixer, DECKS, activeDecks, state, escapeHtml, fmtTime, toast, shortLicense, keyLabel, leadDeck, heardKey, store } from './core.js';
 import { loadToDeck } from './load.js';
 

@@ -99,9 +99,7 @@ function playSfx(sound, pad) {
   if (deck && $('#sfxQuantize').checked) {
     // Next beat of the lead deck, on the audio clock.
     const p = deck.position;
-    const off = deck.track.beatOffset;
-    const period = 60 / deck.bpm;
-    const next = off + Math.ceil((p - off) / period + 0.02) * period;
+    const next = deck.grid.posAt(Math.ceil(deck.grid.beatAt(p) + 0.02));
     // Decks reach the speakers through the fx node, a moment later; SFX don't, so wait that out too.
     t = ctx.currentTime + (next - p) / deck.speed + deck.fxDelay;
   }

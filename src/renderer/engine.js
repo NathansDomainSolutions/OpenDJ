@@ -3,6 +3,7 @@
 // speed) unless key lock is on. Each deck runs through a deck-fx worklet
 // (key shift / key lock / stems) before its EQ.
 
+import { BeatGrid } from './beatgrid.js';
 import SignalsmithStretch from './lib/SignalsmithStretch.mjs';
 
 const dbToGain = (db) => Math.pow(10, db / 20);
@@ -19,9 +20,13 @@ export const LOOKAHEAD = 0.025;
 // The deck-fx worklet (key shift / stems) delays a deck by one STFT frame (FRAME in deck-fx.worklet.js).
 const FX_DELAY_FRAMES = 2048;
 
+// Output buffer choices (Web Audio latency hints; a number is seconds).
+export const AUDIO_BUFFERS = { low: 'interactive', balanced: 0.03, stable: 'playback' };
+
 export class Mixer {
-  constructor() {
-    this.ctx = new AudioContext({ latencyHint: 'interactive', sampleRate: 48000 });
+  /** `buffer` is the Settings choice: 'low' answers fastest, 'stable' gives a slow computer the most room before audio crackles. */
+  constructor(buffer = 'balanced') {
+    this.ctx = new AudioContext({ latencyHint: AUDIO_BUFFERS[buffer] ?? AUDIO_BUFFERS.balanced, sampleRate: 48000 });
     this.master = this.ctx.createGain();
     this.limiter = this.ctx.createDynamicsCompressor();
     this.limiter.threshold.value = -1.5;
@@ -206,11 +211,12 @@ export class Deck {
   attachScratch() {
     this.scratchNode = new AudioWorkletNode(this.ctx, 'scratch', { numberOfInputs: 0, outputChannelCount: [2] });
     this.scratchNode.connect(this.stretchOn ? this.trim : this.bus); // through key shift, EQ and faders like normal playback
-    if (this.buffer) this.sendScratchBuffer();
   }
 
+  /** Give the scratch voice its copy of the track: on the first scratch, not on every load (it is a full copy). */
   sendScratchBuffer() {
-    // shortcut: copies the decoded track into the worklet (2× its RAM), use a SharedArrayBuffer if memory gets tight.
+    if (this.scratchHas === this.buffer || !this.scratchNode || !this.buffer) return;
+    this.scratchHas = this.buffer;
     const channels = [];
     for (let c = 0; c < this.buffer.numberOfChannels; c++) channels.push(this.buffer.getChannelData(c).slice());
     this.scratchNode.port.postMessage({ type: 'load', channels }, channels.map((a) => a.buffer));
@@ -221,6 +227,7 @@ export class Deck {
     const wasPlaying = this.playing;
     this.pause();
     this.scratching = true;
+    this.sendScratchBuffer();
     this.scratchNode?.port.postMessage({ type: 'start', pos: this.pausedPos });
     return wasPlaying;
   }
@@ -245,11 +252,9 @@ export class Deck {
     return this.fx ? FX_DELAY_FRAMES / this.ctx.sampleRate : 0;
   }
 
-  /** Bar grid: { beatsPerBar, downbeat } with fallbacks for tracks analysed before bars existed. */
-  get bars() {
-    const t = this.track;
-    if (!t?.bpm || t.beatOffset == null) return null;
-    return { beatsPerBar: t.beatsPerBar || 4, downbeat: t.downbeat ?? t.beatOffset };
+  /** The loaded track's beat grid (see beatgrid.js), or null when it has no tempo. */
+  get grid() {
+    return BeatGrid.of(this.track);
   }
 
   /** Pitch change the fx node applies on top of playback speed. */
@@ -380,8 +385,11 @@ export class Deck {
     return this.track?.bpm || null;
   }
 
+  /** The tempo you hear right now: the track's tempo where the deck is, times the tempo slider. */
   get effectiveBpm() {
-    return this.bpm ? this.bpm * this.rate : null;
+    if (!this.bpm) return null;
+    const g = this.grid;
+    return (g ? g.bpmAt(this.position) : this.bpm) * this.rate;
   }
 
   /** Playback speed: tempo times any nudge being held. */
@@ -405,15 +413,10 @@ export class Deck {
     return this.positionAt(this.ctx.currentTime);
   }
 
-  /** Seconds per beat in track time. */
-  get beatPeriod() {
-    return this.bpm ? 60 / this.bpm : 0;
-  }
-
-  /** Beats since the downbeat at track position pos (fractional). */
-  deckBeat(pos) {
-    const bars = this.bars;
-    return bars ? (pos - bars.downbeat) / this.beatPeriod : 0;
+  /** Heard seconds one beat lasts right now (at this tempo, where the deck is). */
+  get beatSeconds() {
+    const g = this.grid;
+    return g ? g.beatSeconds(this.position) / this.speed : 0;
   }
 
   load(buffer, track) {
@@ -430,7 +433,6 @@ export class Deck {
     this.aiStems = null;
     this.applyAiGains();
     this.sendFx();
-    if (this.scratchNode) this.sendScratchBuffer();
     this.emit('load');
   }
 
@@ -615,13 +617,12 @@ export class Deck {
     this.emit('bendEnd');
   }
 
+  /** `pos` moved onto the beat it's near (within a quarter beat), else unchanged. */
   snapToBeat(pos) {
-    const t = this.track;
-    if (!t?.bpm || t.beatOffset == null) return pos;
-    const period = 60 / t.bpm;
-    const n = Math.round((pos - t.beatOffset) / period);
-    const snapped = t.beatOffset + n * period;
-    return Math.abs(snapped - pos) < period * 0.25 ? Math.max(0, snapped) : pos;
+    const g = this.grid;
+    if (!g) return pos;
+    const snapped = g.nearest(pos);
+    return Math.abs(snapped - pos) < g.beatSeconds(pos) * 0.25 ? Math.max(0, snapped) : pos;
   }
 
   setLoop(beats) {
@@ -630,16 +631,12 @@ export class Deck {
       this.exitLoop();
       return;
     }
-    const bpm = this.bpm || 120;
-    const period = 60 / bpm;
+    const g = this.grid;
     const pos = this.position;
-    let start = pos;
-    if (this.track?.beatOffset != null && this.bpm) {
-      const n = Math.floor((pos - this.track.beatOffset) / period);
-      start = Math.max(0, this.track.beatOffset + n * period);
-    }
+    // From the beat the deck is in (without a grid: from here, at 120 BPM).
+    let start = g ? Math.max(0, g.posAt(Math.floor(g.beatAt(pos) + 1e-6))) : pos;
     if (this.loop) start = this.loop.start; // resizing keeps the start
-    const end = Math.min(this.duration, start + beats * period);
+    const end = Math.min(this.duration, g ? g.posAt(g.beatAt(start) + beats) : start + beats * 0.5);
     if (end - start < 0.02) return;
     this.loop = { start, end, beats };
     if (this.playing) {
@@ -695,19 +692,19 @@ export class Deck {
    * other deck it just rounds to this track's own nearest beat.
    */
   beatSnap(pos, other, div = 1) {
-    const t = this.track;
-    if (!this.bpm || t?.beatOffset == null) return 0;
-    const per = 60 / this.bpm;
+    const g = this.grid;
+    if (!g) return 0;
     let target = 0; // phase (0..1) the beat should land on
-    if (other && other !== this && other.playing && other.bpm && other.track?.beatOffset != null) {
+    if (other && other !== this && other.playing && other.grid) {
       const k = [1, 2, 0.5].find((m) => Math.abs((this.effectiveBpm * m) / other.effectiveBpm - 1) < 0.1); // close tempos: line up with where the other deck is now
-      if (k) target = frac((((other.position - other.track.beatOffset) / (60 / other.bpm)) / k) * div);
+      if (k) target = frac((other.grid.beatAt(other.position) / k) * div);
     }
-    let d = target - frac(((pos - t.beatOffset) / per) * div); // in steps of 1/div beat
+    const beat = g.beatAt(pos);
+    let d = target - frac(beat * div); // in steps of 1/div beat
     if (d > 0.5) d -= 1;
     if (d < -0.5) d += 1;
-    if (pos + (d * per) / div < 0) d += 1; // before 0:00 would get clamped: take the next step instead
-    return (d * per) / div;
+    if (g.posAt(beat + d / div) < 0) d += 1; // before 0:00 would get clamped: take the next step instead
+    return g.posAt(beat + d / div) - pos;
   }
 
   setEq(band, db) {
@@ -843,16 +840,17 @@ export class FxChain {
   syncGate() {
     const d = this.deck;
     const g = this.state.gate;
-    if (!g.on || !d.playing || !d.bpm || d.track?.beatOffset == null) {
+    const grid = d.grid;
+    if (!g.on || !d.playing || !grid) {
       if (!g.on && this.gateOsc) {
         this.gateOsc.stop(this.ctx.currentTime + 0.1); // after the depth has glided to 0
         this.gateOsc = null;
       }
       return;
     }
-    const step = 60 / d.bpm / g.div; // track seconds per gate step
     const pos = d.position;
-    const next = d.track.beatOffset + Math.ceil((pos - d.track.beatOffset) / step) * step;
+    const step = grid.beatSeconds(pos) / g.div; // track seconds per gate step
+    const next = grid.posAt(Math.ceil(grid.beatAt(pos) * g.div) / g.div);
     // The deck-fx node ahead of the gate delays the audio: open on the step as heard.
     const when = this.ctx.currentTime + (next - pos) / d.rate + d.fxDelay;
     const osc = this.ctx.createOscillator();

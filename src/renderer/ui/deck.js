@@ -1,13 +1,12 @@
 // One deck's controls: transport, tempo, hot cues, loops, key, stems and effects.
 import { STEMS } from '../engine.js';
-import { keyName, camelot } from '../analysis.js';
-import { keyRelation, hasKey } from '../match.js';
+import { keyName, camelot, keyRelation, hasKey } from '../key.js';
 import { $, $$, mixer, group, DECKS, state, ui, escapeHtml, shortLicense, heardKey, heardPitch, partnerDeck } from './core.js';
 import { prepareVideo } from './video.js';
 import { renderHotcues, hotcue, clearHotcue, scaleBpm, beatHere, cycleMeter, setupTap } from './grid.js';
 import { renderLibrary, renderLibrarySoon } from './library.js';
 import { setupDeckDrop } from './load.js';
-import { snapDeck, togglePlay, followTempo, doSync, matchTempo, relink, matchKey } from './sync-ui.js';
+import { snapDeck, togglePlay, followTempo, doSync, matchTempo, relink, matchKey, nextReading } from './sync-ui.js';
 
 export function buildDeck(name) {
   const root = $(`#deck${name}`);
@@ -25,6 +24,8 @@ export function buildDeck(name) {
     bpmTrack: $('.bpm-track', root),
     rate: $('.rate', root),
     overview: $('.overview', root),
+    wave: $(`#wave${name}`),
+    stripMeter: $(`.strip[data-deck="${name}"] .meter`),
     play: $('.play', root),
     cue: $('.cue', root),
     sync: $('.sync', root),
@@ -107,6 +108,7 @@ export function buildDeck(name) {
   $('.half', root).addEventListener('click', () => scaleBpm(name, 0.5));
   $('.double', root).addEventListener('click', () => scaleBpm(name, 2));
   $('.beat-here', root).addEventListener('click', () => beatHere(name));
+  $('.alt-bpm', root).addEventListener('click', () => nextReading(name));
   d.meter.addEventListener('click', () => cycleMeter(name));
   setupTap(name);
 
@@ -278,7 +280,7 @@ export function renderTempo(name) {
   const d = ui[name];
   const pct = (deck.rate - 1) * 100;
   d.rate.textContent = `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
-  d.meter.textContent = `${deck.bars?.beatsPerBar || 4}/4`;
+  d.meter.textContent = `${deck.grid?.beatsPerBar || 4}/4`;
   if (deck.bpm) {
     d.bpmEff.textContent = deck.effectiveBpm.toFixed(1);
     d.bpmTrack.textContent = `${Number(deck.bpm).toFixed(1)} track`;

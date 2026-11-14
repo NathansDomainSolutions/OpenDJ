@@ -2,14 +2,22 @@
 // Imports no other UI module, so it is always ready first.
 import { Mixer, XF_SIDE } from '../engine.js';
 import { SyncGroup } from '../sync.js';
-import { keyName, camelot, transposeKey } from '../analysis.js';
+import { keyName, camelot, transposeKey } from '../key.js';
 
 export const api = window.cdj;
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 export const clamp = (v, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v));
 
-export const mixer = new Mixer();
+// The audio buffer is fixed when the audio engine starts, so it is read here and a change in Settings applies on restart.
+export const mixer = new Mixer(savedAudioBuffer());
+function savedAudioBuffer() {
+  try {
+    return localStorage.getItem('audioBuffer') || 'balanced';
+  } catch {
+    return 'balanced';
+  }
+}
 // Beat sync: every synced deck locks to one shared clock (see sync.js).
 export const group = new SyncGroup(mixer);
 window.cdjDebug = { mixer, group }; // for tests and the devtools console
@@ -35,7 +43,7 @@ export function partnerDeck(name) {
 
 /** The deck the crowd is hearing most: playing, and favoured by the crossfader. */
 export function leadDeck() {
-  const playing = activeDecks().filter((n) => mixer.decks[n].playing && mixer.decks[n].bars);
+  const playing = activeDecks().filter((n) => mixer.decks[n].playing && mixer.decks[n].grid);
   if (playing.length < 2) return playing[0] ? mixer.decks[playing[0]] : null;
   const side = mixer.crossfader > 0.5 ? 'R' : 'L';
   return mixer.decks[playing.find((n) => XF_SIDE[n] === side) || playing[0]];

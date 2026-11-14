@@ -49,7 +49,8 @@ export async function scaleBpm(name, k) {
   const ch = [];
   for (let c = 0; c < deck.buffer.numberOfChannels; c++) ch.push(deck.buffer.getChannelData(c));
   const mono = mixToMono(ch);
-  const fit = await analyse('fitAt', mono, deck.buffer.sampleRate, bpm).catch(() => null);
+  // A track with a tempo map keeps its beats where they are: only every other one counts (÷2), or the ones between too (×2).
+  const fit = t.warp ? null : await analyse('fitAt', mono.slice(), deck.buffer.sampleRate, { bpm }).catch(() => null);
   if (deck.track !== t) return; // another track was loaded meanwhile
   const patch = { bpm: fit?.bpm ?? bpm, gridSource: 'user' };
   if (fit?.offset != null) {
@@ -73,7 +74,7 @@ export function beatHere(name) {
   const t = deck.track;
   if (!t?.bpm) return toast('Set a BPM first (TAP along with the beat).');
   const period = 60 / t.bpm;
-  const heard = heardPosition(deck);
+  const heard = deck.grid.musical(heardPosition(deck)); // the grid lives in musical time (see beatgrid.js)
   const offset = ((heard % period) + period) % period;
   saveTrack(t, { beatOffset: offset, downbeat: heard, gridSource: 'user' });
   toast(`Deck ${name}: the playhead is now beat 1 of the bar.`);
@@ -113,7 +114,8 @@ export function setupTap(name) {
       const offset = ((heard % period) + period) % period;
       // Taps mark beats, not beat 1: keep the old bar start, moved onto the nearest new beat.
       const old = deck.track.downbeat ?? offset;
-      saveTrack(deck.track, { bpm, beatOffset: offset, downbeat: offset + Math.round((old - offset) / period) * period, gridSource: 'user' });
+      // A tapped tempo is one steady tempo: it replaces any tempo map.
+      saveTrack(deck.track, { bpm, beatOffset: offset, downbeat: offset + Math.round((old - offset) / period) * period, warp: null, variable: false, gridSource: 'user' });
       renderTempo(name);
       renderLibrary();
       relink(name);

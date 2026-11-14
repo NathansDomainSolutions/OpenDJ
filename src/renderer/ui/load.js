@@ -1,11 +1,10 @@
 // Loading a track onto a deck: decode, analyse (in a worker), and AI stems in the background.
 import { AI_STEM_NAMES } from '../engine.js';
-import { mixToMono, computeWaveform, analyzeTrack, fitGridAt, detectKey, onsetEnvelope, ANALYSIS_VERSION, KEY_VERSION } from '../analysis.js';
-import { api, $, mixer, group, DECKS, state, toast, cleanErr, ui, saveTrack } from './core.js';
-import { doSync, listenAndTell } from './sync-ui.js';
+import { mixToMono, computeWaveform, analyzeTrack, fitGridAt, detectKey, ANALYSIS_VERSION, KEY_VERSION } from '../analysis.js';
+import { api, $, mixer, DECKS, state, toast, cleanErr, ui, saveTrack } from './core.js';
+import { doSync } from './sync-ui.js';
 import { renderDeckState, renderStems } from './deck.js';
 import { hideDropOverlay, importFiles } from './library.js';
-import { loudness } from './video.js';
 
 // Analysis runs in a worker so loading never stalls the decks; the main thread is the fallback.
 let analysisWorker = null;
@@ -22,17 +21,23 @@ try {
 } catch (err) {
   console.error('Analysis worker unavailable, analysing on the main thread:', err);
 }
-/** op 'analyze' (tempo, meter, key), 'key', 'onsets' or 'fitAt' (re-fit the grid at a given BPM). mono is copied, not consumed. */
-export function analyse(op, mono, sampleRate, bpm) {
+/**
+ * Run an analysis job in the worker (see analysis-worker.js): 'prepare' (waveform, and as
+ * `want` asks the beat grid and key) or 'fitAt' (re-fit the grid at `bpm`).
+ * `mono` is handed over to the worker: it is empty here afterwards.
+ */
+export function analyse(op, mono, sampleRate, { bpm, want } = {}) {
   if (!analysisWorker) {
-    const run = { analyze: analyzeTrack, key: detectKey, onsets: onsetEnvelope, fitAt: fitGridAt }[op];
-    return Promise.resolve(run(mono, sampleRate, bpm));
+    if (op === 'fitAt') return Promise.resolve(fitGridAt(mono, sampleRate, bpm));
+    const result = { wave: computeWaveform(mono, sampleRate, 300) };
+    if (want?.grid) Object.assign(result, analyzeTrack(mono, sampleRate, { key: !!want.key }));
+    else if (want?.key) result.key = detectKey(mono, sampleRate);
+    return Promise.resolve(result);
   }
   return new Promise((resolve, reject) => {
     const id = ++analysisSeq;
     analysisWaiting.set(id, { resolve, reject });
-    const copy = mono.slice();
-    analysisWorker.postMessage({ id, op, mono: copy, sampleRate, bpm }, [copy.buffer]);
+    analysisWorker.postMessage({ id, op, mono, sampleRate, bpm, want }, [mono.buffer]);
   });
 }
 // Grids made by an older analyser are redone on load, unless you set them by hand (TAP, Beat 1, ÷2, ×2 ...).
@@ -58,14 +63,16 @@ export async function loadToDeck(name, trackId) {
     const buffer = await mixer.ctx.decodeAudioData(data);
     const channels = [];
     for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
-    const mono = mixToMono(channels);
-    const wave = computeWaveform(mono, buffer.sampleRate, 300);
+    // The waveform, beat grid and key are all worked out in the worker, in one pass.
+    const want = { grid: needsAnalysis(track), key: needsKey(track) };
+    if (want.grid || want.key) d.artist.textContent = want.grid ? 'Finding the beat…' : 'Finding the key…';
+    // The mono mix is handed over to the worker. A mono file's mix is the track itself: send a copy of that.
+    const mono = channels.length === 1 ? channels[0].slice() : mixToMono(channels);
+    const { wave, tempo, meter, key } = await analyse('prepare', mono, buffer.sampleRate, { want });
 
     const patch = {};
     if (!track.duration) patch.duration = buffer.duration;
-    if (needsAnalysis(track)) {
-      d.artist.textContent = 'Finding the beat…';
-      const { tempo, meter, key } = await analyse('analyze', mono, buffer.sampleRate);
+    if (want.grid) {
       if (track.bpm) patch.gridPrev = { bpm: track.bpm, beatOffset: track.beatOffset, beatsPerBar: track.beatsPerBar, downbeat: track.downbeat };
       Object.assign(patch, { gridVersion: ANALYSIS_VERSION, gridSource: 'auto' });
       if (tempo) {
@@ -77,35 +84,25 @@ export async function loadToDeck(name, trackId) {
           bpmConfidence: tempo.confidence,
           gridRms: tempo.gridRms,
           variable: tempo.variable,
+          warp: tempo.warp,
           bpmAlts: tempo.alts,
         });
       } else {
         patch.bpm = 0; // analysed, no clear beat
       }
-      if (needsKey(track)) Object.assign(patch, keyPatch(key));
-    } else if (needsKey(track)) {
-      d.artist.textContent = 'Finding the key…';
-      Object.assign(patch, keyPatch(await analyse('key', mono, buffer.sampleRate)));
     }
+    if (want.key) Object.assign(patch, keyPatch(key));
     if (Object.keys(patch).length) await saveTrack(track, patch);
     if (track.bpm === 0) track.bpm = null;
 
     state.waves[name] = wave;
     state.overviewImg[name] = null;
     deck.load(buffer, track);
-    deck.onsets = null;
-    // The hits Sync listens to: in the background, ready a moment after the track.
-    analyse('onsets', mono, buffer.sampleRate).then((o) => {
-      if (deck.track !== track) return;
-      deck.onsets = o;
-      // Synced before its hits were ready (Sync stays on across loads): listen now, unless it's on air.
-      if (group.has(deck) && loudness(name) < 0.1) listenAndTell(name);
-    }).catch((err) => console.error('Onsets unavailable:', err));
     state.knobs[name].forEach((k) => k.set(k.reset)); // gain, EQ and filter back to 12 o'clock
     // A fresh load starts at normal speed; keep the slider in step.
     d.tempo.value = 0;
     deck.setRate(1);
-    if (deck.resync && deck.bpm) doSync(name);
+    if (deck.resync && deck.grid) doSync(name);
     prepareAiStems(name, track, buffer); // background; DSP stems work meanwhile
   } catch (err) {
     console.error(err);
@@ -149,11 +146,9 @@ export function setupDeckDrop(el, name) {
 
 async function loadAiStems(name, trackId) {
   const deck = mixer.decks[name];
-  const buffers = {};
-  for (const n of AI_STEM_NAMES) {
-    const data = await api.stems.read(trackId, n);
-    buffers[n] = await mixer.ctx.decodeAudioData(data);
-  }
+  // All four at once: reading and decoding run off the main thread, side by side.
+  const decoded = await Promise.all(AI_STEM_NAMES.map(async (n) => mixer.ctx.decodeAudioData(await api.stems.read(trackId, n))));
+  const buffers = Object.fromEntries(AI_STEM_NAMES.map((n, i) => [n, decoded[i]]));
   if (deck.track?.id === trackId) deck.setAiStems(buffers);
 }
 

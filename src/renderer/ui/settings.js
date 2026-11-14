@@ -201,6 +201,18 @@ export function setupSettings() {
   };
   $$('#mvSeg button').forEach((b) => b.addEventListener('click', () => setMv(b.dataset.mv === 'on')));
 
+  // Audio buffer: fixed when the audio engine starts, so a change applies on the next start.
+  const showBuffer = (v) => pick($$('#bufferSeg button'), (b) => b.dataset.buffer === v);
+  showBuffer(store.get('audioBuffer', 'balanced'));
+  $$('#bufferSeg button').forEach((b) =>
+    b.addEventListener('click', () => {
+      if (store.get('audioBuffer', 'balanced') === b.dataset.buffer) return;
+      store.set('audioBuffer', b.dataset.buffer);
+      showBuffer(b.dataset.buffer);
+      toast('Audio buffer saved. It applies the next time OpenDJ starts.');
+    }),
+  );
+
   // Master volume: the same value as the top-bar slider, kept in step both ways.
   const top = $('#masterVol');
   const vol = $('#setVolume');

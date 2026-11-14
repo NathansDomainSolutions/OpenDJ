@@ -276,6 +276,10 @@
       <div class="set-grid">
         <label for="setOutput">Output device</label>
         <select id="setOutput" class="field"><option value="">System default</option></select>
+        <span>Audio buffer</span>
+        <div class="seg" id="bufferSeg" role="radiogroup" aria-label="Audio buffer" title="Low answers fastest. Stable gives a slower computer more room, so audio doesn't crackle. Applies the next time OpenDJ starts.">
+          <button data-buffer="low" role="radio" aria-checked="false">Low delay</button><button data-buffer="balanced" class="on" role="radio" aria-checked="true">Balanced</button><button data-buffer="stable" role="radio" aria-checked="false">Stable</button>
+        </div>
         <label for="setVolume">Master volume</label>
         <input id="setVolume" class="hslider" type="range" min="0" max="1" step="0.01" value="0.85" />
         <span>Music videos</span>
@@ -358,7 +362,7 @@
         <div class="row transport">
           <button class="pad cue" title="Cue: set or jump back to the cue point">Cue</button>
           <button class="pad play" title="Play / pause">▶</button>
-          <button class="pad sync" title="Sync: match tempo and beat to the other deck and keep the tempos locked together. Press again to unlock. Shift-click: take the other deck's tempo once, without locking.">Sync</button>
+          <button class="pad sync" title="Sync: take the other deck's tempo and put this deck's beats on its beats, now, and keep them there. Press again to unlock. Shift-click: take the other deck's tempo once, without locking.">Sync</button>
           <button class="mini sync-mult" aria-label="Sync ratio" title="Sync ratio: sync at ½×, 1× or 2× the other deck's tempo (click to change)">1×</button>
           <div class="nudge">
             <button class="mini nudge-back" title="Nudge back (hold)">◀◀</button>
@@ -381,6 +385,7 @@
           <span class="label" title="Fix the detected tempo / beat grid">BPM</span>
           <button class="mini half" title="Halve BPM">÷2</button>
           <button class="mini double" title="Double BPM">×2</button>
+          <button class="mini alt-bpm" title="Alt: try the analyser's next tempo reading for this track (when ÷2 or ×2 isn't it: the usual misreads are ⅔, ¾, 4⁄3 or 5⁄4 of the real tempo)">Alt</button>
           <button class="mini tap" title="Tap along to set BPM">Tap</button>
           <button class="mini beat-here" title="Make the playhead beat 1 of the bar (fixes the grid and the bar start)">Beat 1</button>
           <button class="mini meter" title="Time signature — click to switch between 4/4 and 3/4">4/4</button>

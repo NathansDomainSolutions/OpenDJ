@@ -17,63 +17,124 @@ function fitCanvas(canvas) {
   return false;
 }
 
-// Three-colour waveforms (as in djay / Serato): bass, mids and highs each in their own
-// colour over a faint full-signal outline. In each pixel column the loudest band is drawn
-// at the back and the quietest in front (judged over a few pixels, so the order doesn't
-// flicker where two bands are close), so all three always show: a kick reads as a red
-// burst, a snare or voice as amber, hats as a bright core.
+// ---------------------------------------------------------------- a steady clock for drawing
+
+// The audio clock (ctx.currentTime) moves in steps of a whole audio buffer, up to 10 ms or
+// more at a time, so positions read from it once per frame land unevenly and a scrolling
+// waveform judders. Drawing uses this instead: the audio clock carried forward by the
+// frame clock, and steered gently back to it so the two never drift apart.
+const clock = { perf: 0, audio: 0 };
+function drawTime() {
+  const perf = performance.now() / 1000;
+  const audio = mixer.ctx.currentTime;
+  const guess = clock.audio + (perf - clock.perf);
+  // Stopped, or far off (start-up, a suspended context, a long stall): take the audio clock as it is.
+  clock.audio = mixer.ctx.state !== 'running' || Math.abs(guess - audio) > 0.05 ? audio : guess + (audio - guess) * 0.02;
+  clock.perf = perf;
+  return clock.audio;
+}
+
+// ---------------------------------------------------------------- the three-colour waveform
+
+// Bass, mids and highs each in their own colour over a faint full-signal outline (as in
+// djay / Serato). In each pixel column the loudest band is drawn at the back and the
+// quietest in front (judged over a few pixels, so the order doesn't flicker where two bands
+// are close), so all three always show: a kick reads as a red burst, a snare or voice as
+// amber, hats as a bright core.
 const BANDS = ['low', 'mid', 'high'];
+const KEYS = ['peak', 'low', 'mid', 'high'];
+let levels = { size: 0 }; // per-pixel levels, reused between draws
 
 /**
- * Draw a waveform across W device pixels. span(x) gives the wave columns under pixel x as
- * fractional [from, to); zoomed in past one column per pixel, levels are interpolated.
+ * Draw a waveform across W device pixels. `from` and `per` say which wave columns lie under
+ * pixel x: [from + x × per, from + (x + 1) × per). Zoomed in past one column per pixel,
+ * levels are interpolated.
  */
-function drawBands(ctx, wave, W, mid, half, span) {
+function drawBands(ctx, wave, W, mid, half, from, per) {
   const n = wave.peak.length;
-  const peak = new Path2D();
-  const layers = [0, 1, 2].map(() => ({ low: new Path2D(), mid: new Path2D(), high: new Path2D() })); // back to front
-  const lv = { peak: new Float32Array(W), low: new Float32Array(W), mid: new Float32Array(W), high: new Float32Array(W) };
-  const v = { peak: 0, low: 0, mid: 0, high: 0 };
-  for (let x = 0; x < W; x++) {
-    const r = span(x);
-    if (!r || r[1] <= 0 || r[0] >= n - 1) continue;
-    if (r[1] - r[0] < 1) {
-      const p = Math.max(0, (r[0] + r[1]) / 2 - 0.5);
-      const i = Math.min(n - 2, Math.floor(p));
-      const f = p - i;
-      for (const k in v) v[k] = wave[k][i] + (wave[k][i + 1] - wave[k][i]) * f;
-    } else {
-      for (const k in v) v[k] = 0;
-      for (let c = Math.max(0, Math.floor(r[0])); c < Math.min(n, Math.ceil(r[1])); c++) {
-        for (const k in v) if (wave[k][c] > v[k]) v[k] = wave[k][c];
+  if (levels.size < W) levels = { size: W, peak: new Float32Array(W), low: new Float32Array(W), mid: new Float32Array(W), high: new Float32Array(W) };
+  for (const k of KEYS) {
+    const src = wave[k];
+    const out = levels[k];
+    for (let x = 0; x < W; x++) {
+      const a = from + x * per;
+      const b = a + per;
+      let v = 0;
+      if (b > 0 && a < n - 1) {
+        if (per < 1) {
+          const p = Math.max(0, (a + b) / 2 - 0.5);
+          const i = Math.min(n - 2, Math.floor(p));
+          v = src[i] + (src[i + 1] - src[i]) * (p - i);
+        } else {
+          const end = Math.min(n, Math.ceil(b));
+          for (let c = Math.max(0, Math.floor(a)); c < end; c++) if (src[c] > v) v = src[c];
+        }
       }
+      out[x] = v;
     }
-    for (const k in v) lv[k][x] = v[k];
   }
+  const peak = new Path2D();
+  const layers = [0, 1, 2].map(() => [new Path2D(), new Path2D(), new Path2D()]); // back to front, one path per band
   const R = 4; // ordering window: ±4 px
-  const sum = { low: 0, mid: 0, high: 0 };
+  const sum = [0, 0, 0];
+  const lv = BANDS.map((b) => levels[b]);
   for (let x = -R; x < W; x++) {
-    for (const b of BANDS) sum[b] += (lv[b][x + R] || 0) - (lv[b][x - R - 1] || 0);
+    for (let b = 0; b < 3; b++) sum[b] += (x + R < W ? lv[b][x + R] : 0) - (x - R - 1 >= 0 ? lv[b][x - R - 1] : 0);
     if (x < 0) continue;
-    const hp = lv.peak[x] * half;
+    const hp = levels.peak[x] * half;
     if (hp >= 0.5) peak.rect(x, mid - hp, 1, hp * 2);
-    BANDS.slice().sort((a, b) => sum[b] - sum[a]).forEach((band, rank) => {
-      const h = lv[band][x] * half;
-      if (h >= 0.5) layers[rank][band].rect(x, mid - h, 1, h * 2);
-    });
+    for (let b = 0; b < 3; b++) {
+      const h = lv[b][x] * half;
+      if (h < 0.5) continue;
+      let rank = 0; // how many bands are louder around here: those go behind this one
+      for (let o = 0; o < 3; o++) if (o !== b && (sum[o] > sum[b] || (sum[o] === sum[b] && o < b))) rank++;
+      layers[rank][b].rect(x, mid - h, 1, h * 2);
+    }
   }
   ctx.fillStyle = `rgba(${INK.ink},0.1)`;
   ctx.fill(peak);
   for (const layer of layers) {
-    for (const band of BANDS) {
-      ctx.fillStyle = `rgb(${INK.bands[band].join(',')})`;
-      ctx.fill(layer[band]);
+    for (let b = 0; b < 3; b++) {
+      ctx.fillStyle = `rgb(${INK.bands[BANDS[b]].join(',')})`;
+      ctx.fill(layer[b]);
     }
   }
 }
 
-function drawScrolling(name) {
-  const canvas = $(`#wave${name}`);
+// The scrolling waveform is drawn once onto a long strip (three views wide) and then only
+// slid along each frame: the picture stays the same from frame to frame instead of being
+// re-sampled at every position (which shimmered), and a frame costs one image copy.
+const strips = {};
+function stripFor(name, wave, pps, left, W, H) {
+  let s = strips[name];
+  const right = left + W / pps;
+  const now = performance.now();
+  const fits = s && s.wave === wave && s.H === H && s.bands === INK.bands && left >= s.t0 && right <= s.t1;
+  const scale = s ? pps / s.pps : 1;
+  // A small change of scale (a tempo move, sync following a drummer) just stretches the strip;
+  // a zoom redraws it, at most 12 times a second while the zoom is moving.
+  if (fits && (Math.abs(scale - 1) < 0.03 || (now - s.made < 80 && scale > 0.5 && scale < 2))) return s;
+  if (!s) s = strips[name] = { canvas: document.createElement('canvas') };
+  const width = Math.min(16384, W * 3);
+  if (s.canvas.width !== width || s.canvas.height !== H) {
+    s.canvas.width = width;
+    s.canvas.height = H;
+  }
+  const span = width / pps;
+  Object.assign(s, { wave, H, bands: INK.bands, pps, made: now, t0: (left + right) / 2 - span / 2, t1: (left + right) / 2 + span / 2 });
+  const ctx = s.canvas.getContext('2d');
+  ctx.clearRect(0, 0, width, H);
+  const dpr = window.devicePixelRatio || 1;
+  drawBands(ctx, wave, width, H / 2, H / 2 - 3 * dpr, s.t0 * wave.rate, wave.rate / pps);
+  return s;
+}
+
+// Ruler: [length px, opacity] for bar, beat, ½, ¼, ⅛, ⅟₁₆ lines, and each level's share of a beat.
+const RULER = [[14, 0.6], [10, 0.38], [7, 0.26], [5, 0.19], [3.5, 0.14], [2.5, 0.1]];
+const RULER_BEATS = [1, 1, 0.5, 0.25, 0.125, 0.0625];
+
+function drawScrolling(name, pos) {
+  const canvas = ui[name].wave;
   fitCanvas(canvas);
   const ctx = canvas.getContext('2d');
   const W = canvas.width;
@@ -86,59 +147,51 @@ function drawScrolling(name) {
   const cx = Math.round(W / 2);
 
   if (wave && deck.buffer) {
-    const pos = deck.position;
     const pps = dpr / secPerCssPx(deck, canvas.clientWidth); // device pixels per track-second
     const t0 = pos - cx / pps;
+    const x = (time) => cx + (time - pos) * pps;
 
     // Loop region
     if (deck.loop) {
-      const x0 = cx + (deck.loop.start - pos) * pps;
-      const x1 = cx + (deck.loop.end - pos) * pps;
       ctx.fillStyle = 'rgba(66,211,146,0.12)';
-      ctx.fillRect(x0, 0, x1 - x0, H);
+      ctx.fillRect(x(deck.loop.start), 0, (deck.loop.end - deck.loop.start) * pps, H);
     }
 
-    drawBands(ctx, wave, W, mid, H / 2 - 3 * dpr, (x) => [(t0 + x / pps) * wave.rate, (t0 + (x + 1) / pps) * wave.rate]);
+    const s = stripFor(name, wave, pps, t0, W, H);
+    ctx.drawImage(s.canvas, (t0 - s.t0) * s.pps, 0, (W / pps) * s.pps, H, 0, 0, W, H);
 
-    // Beat grid
-    const t = deck.track;
-    if (t?.bpm && t.beatOffset != null) {
-      // Ruler: [length px, opacity] for bar, beat, ½, ¼, ⅛, ⅟₁₆ lines.
-      const LEVELS = [[14, 0.6], [10, 0.38], [7, 0.26], [5, 0.19], [3.5, 0.14], [2.5, 0.1]];
-      const period = 60 / t.bpm;
-      const step = period / 16;
-      const tEnd = t0 + W / pps;
-      const bars = deck.bars;
+    // Beat grid: lines where the beats are (they follow the tempo map of a track that wanders).
+    const grid = deck.grid;
+    if (grid) {
+      const beatPx = pps * grid.beatSeconds(pos);
       const minGap = 5 * dpr; // hide a level when its lines would crowd closer than this
-      let n = Math.ceil((t0 - t.beatOffset) / step);
-      for (; t.beatOffset + n * step < tEnd; n++) {
-        const st = t.beatOffset + n * step;
-        if (st < 0) continue;
+      const finest = RULER_BEATS.findLast((b) => beatPx * b >= minGap) ?? 1;
+      const step = Math.round(16 * finest); // sixteenths between lines
+      const last = Math.floor(grid.beatAt(t0 + W / pps) * 16);
+      for (let n = Math.ceil((grid.beatAt(Math.max(0, t0)) * 16) / step) * step; n <= last; n += step) {
         const sub = ((n % 16) + 16) % 16;
-        let level = sub === 0 ? 1 : sub % 8 === 0 ? 2 : sub % 4 === 0 ? 3 : sub % 2 === 0 ? 4 : 5;
-        if (level === 1 && Math.round((st - bars.downbeat) / period) % bars.beatsPerBar === 0) level = 0;
-        if (level > 1 && pps * period * [0, 0, 0.5, 0.25, 0.125, 0.0625][level] < minGap) continue;
-        const [len, alpha] = LEVELS[level];
-        const x = Math.round(cx + (st - pos) * pps) + 0.5;
+        const level = sub !== 0 ? (sub % 8 === 0 ? 2 : sub % 4 === 0 ? 3 : sub % 2 === 0 ? 4 : 5) : (((n / 16) % grid.beatsPerBar) + grid.beatsPerBar) % grid.beatsPerBar === 0 ? 0 : 1;
+        const [len, alpha] = RULER[level];
+        const lx = Math.round(x(grid.posAt(n / 16))) + 0.5;
         ctx.fillStyle = `rgba(${INK.ink},${alpha})`;
-        ctx.fillRect(x, 0, dpr, len * dpr);
-        ctx.fillRect(x, H - len * dpr, dpr, len * dpr);
+        ctx.fillRect(lx, 0, dpr, len * dpr);
+        ctx.fillRect(lx, H - len * dpr, dpr, len * dpr);
       }
     }
 
     // Cue + hot cues
     const marker = (time, color) => {
-      const x = Math.round(cx + (time - pos) * pps);
-      if (x < -10 || x > W + 10) return;
+      const mx = Math.round(x(time));
+      if (mx < -10 || mx > W + 10) return;
       ctx.fillStyle = color;
-      ctx.fillRect(x, 0, 2 * dpr, H);
+      ctx.fillRect(mx, 0, 2 * dpr, H);
       ctx.beginPath();
-      ctx.moveTo(x - 5 * dpr, 0);
-      ctx.lineTo(x + 7 * dpr, 0);
-      ctx.lineTo(x + dpr, 7 * dpr);
+      ctx.moveTo(mx - 5 * dpr, 0);
+      ctx.lineTo(mx + 7 * dpr, 0);
+      ctx.lineTo(mx + dpr, 7 * dpr);
       ctx.fill();
     };
-    (t?.cues || []).forEach((c, i) => c != null && marker(c, HOTCUE_COLORS[i]));
+    (deck.track?.cues || []).forEach((c, i) => c != null && marker(c, HOTCUE_COLORS[i]));
     marker(deck.cuePoint, `rgb(${INK.ink})`);
 
     // Shade the past.
@@ -164,12 +217,11 @@ function buildOverviewImage(name) {
   const img = document.createElement('canvas');
   img.width = W;
   img.height = H;
-  const ctx = img.getContext('2d');
-  drawBands(ctx, overview(wave, W), W, H / 2, H / 2 - 2, (x) => [x, x + 1]);
+  drawBands(img.getContext('2d'), overview(wave, W), W, H / 2, H / 2 - 2, 0, 1);
   return img;
 }
 
-function drawOverview(name) {
+function drawOverview(name, pos) {
   const canvas = ui[name].overview;
   const resized = fitCanvas(canvas);
   const deck = mixer.decks[name];
@@ -182,7 +234,7 @@ function drawOverview(name) {
   ctx.drawImage(state.overviewImg[name], 0, 0);
   const dpr = window.devicePixelRatio || 1;
   const px = (t) => (t / deck.duration) * W;
-  const x = px(deck.position);
+  const x = px(pos);
   ctx.fillStyle = INK.light ? `rgba(${INK.ink},0.18)` : `rgba(${INK.shade},0.55)`;
   ctx.fillRect(0, 0, x, H);
   if (deck.loop) {
@@ -201,22 +253,32 @@ function drawOverview(name) {
   ctx.fillRect(x - (grabbed ? 1.5 : 0.5) * dpr, 0, (grabbed ? 3 : 2) * dpr, H);
 }
 
-const meterScratch = new Float32Array(1024);
-const meterPeaks = { A: -60, B: -60, M: -60 };
+// ---------------------------------------------------------------- meters and readouts
 
-function setMeter(el, db, key) {
-  const pct = Math.max(0, Math.min(1, (db + 48) / 48));
-  meterPeaks[key] = Math.max(db, meterPeaks[key] - 0.6);
-  const peakPct = Math.max(0, Math.min(1, (meterPeaks[key] + 48) / 48));
-  const fill = $('.meter-fill', el);
-  const peak = $('.meter-peak', el);
-  if (el.classList.contains('meter-h')) {
-    fill.style.clipPath = `inset(0 ${(1 - pct) * 100}% 0 0)`;
-    peak.style.left = `calc(${peakPct * 100}% - 2px)`;
+const meterScratch = new Float32Array(1024);
+const meters = new Map(); // meter element -> { fill, peak, horizontal, hold, shown }
+
+function setMeter(el, db) {
+  let m = meters.get(el);
+  if (!m) meters.set(el, (m = { fill: $('.meter-fill', el), peak: $('.meter-peak', el), horizontal: el.classList.contains('meter-h'), hold: -60, shown: '' }));
+  m.hold = Math.max(db, m.hold - 0.6);
+  const level = Math.round(clamp((db + 48) / 48) * 200) / 2; // percent, in half steps
+  const held = Math.round(clamp((m.hold + 48) / 48) * 200) / 2;
+  const key = `${level}/${held}`;
+  if (key === m.shown) return; // nothing moved: leave the page alone
+  m.shown = key;
+  if (m.horizontal) {
+    m.fill.style.clipPath = `inset(0 ${100 - level}% 0 0)`;
+    m.peak.style.left = `calc(${held}% - 2px)`;
   } else {
-    fill.style.clipPath = `inset(${(1 - pct) * 100}% 0 0 0)`;
-    peak.style.bottom = `calc(${peakPct * 100}% - 2px)`;
+    m.fill.style.clipPath = `inset(${100 - level}% 0 0 0)`;
+    m.peak.style.bottom = `calc(${held}% - 2px)`;
   }
+}
+
+/** Set an element's text only when it changes (the frame loop runs 60 times a second). */
+function setText(el, text) {
+  if (el.textContent !== text) el.textContent = text;
 }
 
 const SECONDS_PER_TURN = 60 / (100 / 3);
@@ -233,43 +295,46 @@ function drawBeatGap(name) {
   if (ms == null) return;
   const halfBeat = 30000 / mixer.decks[name].effectiveBpm;
   const x = Math.sign(ms) * Math.sqrt(Math.min(1, Math.abs(ms) / halfBeat));
-  d.phaseDot.style.left = `${50 + 46 * x}%`;
+  d.phaseDot.style.left = `${(50 + 46 * x).toFixed(1)}%`;
   d.phase.classList.toggle('locked', Math.abs(ms) < 5);
-  const text = Math.abs(ms) < 1 ? 'on beat' : `${ms > 0 ? '+' : '−'}${Math.round(Math.abs(ms))} ms`;
-  if (d.phaseMs.textContent !== text) d.phaseMs.textContent = text;
+  setText(d.phaseMs, Math.abs(ms) < 1 ? 'on beat' : `${ms > 0 ? '+' : '−'}${Math.round(Math.abs(ms))} ms`);
 }
 
 export function frame() {
+  const now = drawTime();
   for (const name of activeDecks()) {
     const deck = mixer.decks[name];
     const d = ui[name];
-    drawScrolling(name);
-    drawOverview(name);
+    const pos = deck.playing ? deck.positionAt(now) : deck.position;
+    drawScrolling(name, pos);
+    drawOverview(name, pos);
     if (deck.buffer) {
-      const pos = deck.position;
       const remain = (deck.duration - pos) / deck.rate;
-      d.elapsed.textContent = fmtTime(pos, true);
-      d.remain.textContent = fmtTime(-remain, true);
+      setText(d.elapsed, fmtTime(pos, true));
+      setText(d.remain, fmtTime(-remain, true));
       d.remain.classList.toggle('ending', deck.playing && remain < 30);
       // 33⅓ rpm: one turn of the record is 1.8 s of track, so it spins with the tempo.
-      d.vinyl.style.transform = `rotate(${((pos / SECONDS_PER_TURN) % 1) * 360}deg)`;
-      const bars = deck.bars;
-      if (bars) {
-        const beats = Math.floor((pos - bars.downbeat) / (60 / deck.bpm) + 1e-6);
-        const n = bars.beatsPerBar;
-        d.barpos.textContent = `bar ${Math.floor(beats / n) + 1} · ${'●'.repeat(((beats % n) + n) % n + 1)}${'○'.repeat(n - 1 - (((beats % n) + n) % n))}`;
-      } else d.barpos.textContent = '';
+      d.vinyl.style.transform = `rotate(${(((pos / SECONDS_PER_TURN) % 1) * 360).toFixed(1)}deg)`;
+      const grid = deck.grid;
+      if (grid) {
+        const beats = Math.floor(grid.beatAt(pos) + 1e-6);
+        const n = grid.beatsPerBar;
+        const beat = ((beats % n) + n) % n;
+        setText(d.barpos, `bar ${Math.floor(beats / n) + 1} · ${'●'.repeat(beat + 1)}${'○'.repeat(n - 1 - beat)}`);
+        // A track whose tempo wanders shows the tempo where it is.
+        if (grid.warp && deck.playing) setText(d.bpmEff, deck.effectiveBpm.toFixed(1));
+      } else setText(d.barpos, '');
       drawBeatGap(name);
     } else {
       d.phase.hidden = true;
-      d.elapsed.textContent = '0:00.0';
-      d.remain.textContent = '−0:00.0';
+      setText(d.elapsed, '0:00.0');
+      setText(d.remain, '−0:00.0');
       d.remain.classList.remove('ending');
     }
-    d.cue.classList.toggle('on', !deck.playing && deck.buffer && Math.abs(deck.position - deck.cuePoint) < 0.02);
-    setMeter($(`.strip[data-deck="${name}"] .meter`), peakDb(deck.analyser, meterScratch), name);
+    d.cue.classList.toggle('on', !deck.playing && !!deck.buffer && Math.abs(pos - deck.cuePoint) < 0.02);
+    setMeter(d.stripMeter, peakDb(deck.analyser, meterScratch));
   }
-  setMeter($('#masterMeter'), peakDb(mixer.masterAnalyser, meterScratch), 'M');
+  setMeter(ui.masterMeter || (ui.masterMeter = $('#masterMeter')), peakDb(mixer.masterAnalyser, meterScratch));
   syncVideos();
   requestAnimationFrame(frame);
 }
