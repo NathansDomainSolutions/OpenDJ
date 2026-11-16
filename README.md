@@ -26,6 +26,14 @@ A two-deck DJ app for your own music and Creative Commons tracks, with yt-dlp bu
 - Tracks are analysed again the first time each is loaded after this update.
 - Tests: `test/real-sync.js` plays real songs on two decks, records what each deck sends out and measures how far apart the hits are; `test/stems-gpu.js` checks the keep-alive separator with a stand-in for the models. The sync harness still measures under a quarter of a millisecond in all 10 scenarios.
 
+### Sturdier behind the scenes
+
+- **A damaged library file is kept, not wiped.** If `library.json` can't be read, the app used to start with an empty library and save over it. It now keeps a copy next to it (`library.json.corrupt-…`) first.
+- **Download errors say what went wrong.** Any yt-dlp error containing the letters "age" (page, message, image…) was reported as "YouTube wants a sign-in". Only real age / sign-in errors are now.
+- **macOS:** closing the window while a download or stem job was running no longer throws when it reports progress, and the fullscreen button shows the right state.
+- Two decks asking for the same music video share one download; a stem separator that stops unexpectedly fails its jobs instead of leaving them waiting; the GPU stems path looks for `bin/python` off Windows.
+- Tests run on every push and pull request (`.github/workflows/test.yml`).
+
 ### Matching, and a simpler codebase
 
 Everything that was there still is.

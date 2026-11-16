@@ -1,0 +1,25 @@
+name: Tests
+
+# Runs the unit tests (analysis, sync clock, matching) on every push and pull request.
+# They are plain Node scripts: nothing to install.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check src/main.js && node --check src/preload.js && node --check src/stems-worker.js
+      - run: node test/analysis.test.mjs
+      - run: node test/sync.test.mjs
+      - run: node test/match.test.mjs

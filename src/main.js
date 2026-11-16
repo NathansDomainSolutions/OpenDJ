@@ -41,9 +41,15 @@ function initPaths() {
 async function loadLibrary() {
   try {
     const parsed = JSON.parse(await fsp.readFile(paths.library, 'utf8'));
-    library = { version: 1, tracks: Array.isArray(parsed.tracks) ? parsed.tracks : [] };
-  } catch {
+    library = { version: 1, tracks: Array.isArray(parsed.tracks) ? parsed.tracks.filter((t) => t && typeof t.id === 'string' && typeof t.file === 'string') : [] };
+  } catch (err) {
     library = { version: 1, tracks: [] };
+    // An unreadable library would be overwritten by the next save: keep a copy first.
+    if (err.code !== 'ENOENT') {
+      const keep = `${paths.library}.corrupt-${Date.now()}`;
+      console.error(`Could not read the library (${err.message}); keeping it as ${keep}`);
+      await fsp.copyFile(paths.library, keep).catch(() => {});
+    }
   }
 }
 
@@ -182,7 +188,7 @@ function cleanError(stderr) {
   if (/unable to (download|connect)|getaddrinfo|timed out|network is unreachable/i.test(msg)) {
     return 'Couldn’t reach the site — check your internet connection and try again.';
   }
-  if (/sign in to confirm|age/i.test(msg)) return 'YouTube wants a sign-in for this video, so it can’t be downloaded here.';
+  if (/sign in to confirm|\bage\b|age[- ]restricted/i.test(msg)) return 'YouTube wants a sign-in for this video, so it can’t be downloaded here.';
   return msg.replace(/;?\s*please report this issue.*$/i, '').slice(0, 300);
 }
 
@@ -474,6 +480,7 @@ async function downloadTrack({ url, jobId, meta = null }) {
 async function importLocalFiles(filePaths) {
   const added = [];
   for (const file of filePaths) {
+    if (typeof file !== 'string' || !path.isAbsolute(file)) continue;
     const ext = path.extname(file).slice(1).toLowerCase();
     if (!AUDIO_EXTENSIONS.includes(ext)) continue;
     if (library.tracks.some((t) => t.file === file)) continue;
@@ -606,6 +613,13 @@ function getStemWorker(setup) {
     stemJobs.clear();
     stemWorker = null;
   });
+  const worker = stemWorker;
+  worker.on('exit', (code) => {
+    if (stemWorker !== worker) return;
+    stemWorker = null;
+    for (const job of stemJobs.values()) job.reject(new Error(`The stem separator stopped (exit ${code}).`));
+    stemJobs.clear();
+  });
   return stemWorker;
 }
 
@@ -614,7 +628,7 @@ function getStemWorker(setup) {
 // setup writes stems-gpu/ready.json (models chosen and verified) when complete.
 function gpuSetup() {
   const dir = path.join(paths.root, 'stems-gpu');
-  const python = path.join(dir, 'Scripts', 'python.exe');
+  const python = process.platform === 'win32' ? path.join(dir, 'Scripts', 'python.exe') : path.join(dir, 'bin', 'python');
   try {
     const ready = JSON.parse(fs.readFileSync(path.join(dir, 'ready.json'), 'utf8'));
     if (fs.existsSync(python)) return { python, modelDir: path.join(dir, 'models'), ...ready };
@@ -758,7 +772,14 @@ function cachedVideo(id) {
   }
 }
 
-async function fetchVideo(id) {
+const videoJobs = new Map(); // trackId -> promise, so two decks asking at once share one download
+
+function fetchVideo(id) {
+  if (!videoJobs.has(id)) videoJobs.set(id, downloadVideo(id).finally(() => videoJobs.delete(id)));
+  return videoJobs.get(id);
+}
+
+async function downloadVideo(id) {
   const t = findTrack(id);
   if (t?.source?.kind !== 'web' || !t.source.url) throw new Error('Only downloaded web tracks have a video.');
   let file = cachedVideo(id);
@@ -803,7 +824,7 @@ function registerIpc() {
 
   ipcMain.handle('library:update', (_e, id, patch) => {
     const t = findTrack(id);
-    if (!t) return null;
+    if (!t || !patch || typeof patch !== 'object') return null;
     const allowed = ['title', 'artist', 'bpm', 'beatOffset', 'beatsPerBar', 'downbeat', 'cues', 'duration', 'key',
       'gridVersion', 'gridSource', 'keyVersion', 'chroma', 'tuning', 'warp', 'bpmConfidence', 'gridRms', 'variable', 'bpmAlts', 'gridPrev'];
     for (const key of allowed) if (key in patch) t[key] = patch[key];
@@ -886,8 +907,10 @@ function registerIpc() {
 
   // Window-level fullscreen: page-level requestFullscreen would cover open dialogs (Settings).
   ipcMain.handle('window:toggleFullscreen', () => {
-    mainWindow.setFullScreen(!mainWindow.isFullScreen());
-    return mainWindow.isFullScreen();
+    if (!mainWindow) return false;
+    const on = !mainWindow.isFullScreen();
+    mainWindow.setFullScreen(on);
+    return on; // isFullScreen() still reports the old state while the change animates (macOS)
   });
 
   ipcMain.handle('shell:openExternal', (_e, url) => {
@@ -918,6 +941,7 @@ function createWindow() {
       backgroundThrottling: false, // a covered or minimised window must keep its timers: sync and the gate run on them
     },
   });
+  mainWindow.on('closed', () => (mainWindow = null));
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   if (background) mainWindow.once('ready-to-show', () => mainWindow.showInactive());
 
