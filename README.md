@@ -26,6 +26,10 @@ A two-deck DJ app for your own music and Creative Commons tracks, with yt-dlp bu
 - Tracks are analysed again the first time each is loaded after this update.
 - Tests: `test/real-sync.js` plays real songs on two decks, records what each deck sends out and measures how far apart the hits are; `test/stems-gpu.js` checks the keep-alive separator with a stand-in for the models. The sync harness still measures under a quarter of a millisecond in all 10 scenarios.
 
+### Linux
+
+- **Linux builds (x64 and ARM64).** The release workflow attaches `OpenDJ-<version>-linux-x64.tar.gz` and `-linux-arm64.tar.gz` next to the Windows and macOS zips. Unpack one and run `OpenDJ.sh`; `install-desktop-entry.sh` adds it to the app menu. yt-dlp and the AI stems runtime are bundled as on the other platforms. `npm run package:linux-x64` builds the bare app folder locally.
+
 ### Sturdier behind the scenes
 
 - **A damaged library file is kept, not wiped.** If `library.json` can't be read, the app used to start with an empty library and save over it. It now keeps a copy next to it (`library.json.corrupt-…`) first.
