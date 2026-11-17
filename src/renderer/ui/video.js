@@ -11,7 +11,6 @@ export const mvScreen = { el: null, video: null, get: null, tag: null, deck: nul
 export async function prepareVideo(name) {
   const d = ui[name];
   const t = mixer.decks[name].track;
-  if (d.mvUrl) URL.revokeObjectURL(d.mvUrl);
   d.mvUrl = null;
   d.mvAvailable = false;
   if (!t) return;
@@ -24,15 +23,15 @@ export async function prepareVideo(name) {
 async function getVideo(name) {
   const d = ui[name];
   const id = mixer.decks[name].track?.id;
-  if (!id || d.mvFetching) return;
-  d.mvFetching = true;
+  if (!id || d.mvFetching === id) return;
+  d.mvFetching = id;
   try {
-    const data = await api.video.get(id);
-    if (mixer.decks[name].track?.id === id) d.mvUrl = URL.createObjectURL(new Blob([data]));
+    const url = await api.video.get(id); // the cached file's URL: the video element streams it from disk
+    if (mixer.decks[name].track?.id === id) d.mvUrl = url;
   } catch (err) {
-    toast(`Couldn't get the music video: ${cleanErr(err)}`, 'error');
+    if (mixer.decks[name].track?.id === id) toast(`Couldn't get the music video: ${cleanErr(err)}`, 'error');
   } finally {
-    d.mvFetching = false;
+    if (d.mvFetching === id) d.mvFetching = null;
   }
 }
 

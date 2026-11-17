@@ -46,7 +46,7 @@ export function buildDeck(name) {
     badge: $('.deck-badge', root),
     barpos: $('.barpos', root),
     vinyl: $('.vinyl', root),
-    mvUrl: null, // this deck's music video (blob URL), once fetched
+    mvUrl: null, // this deck's music video (the cached file's URL), once fetched
     mvAvailable: false, // a web track, so a video can be fetched
   };
   $('.vinyl-label', root).textContent = name;
@@ -244,8 +244,7 @@ export function buildDeck(name) {
     const rate = $('.fx-rate', box);
     rate?.addEventListener('click', () => {
       const div = { 1: 2, 2: 4, 4: 1 }[deck.fxChain.state.gate.div];
-      deck.fxChain.set('gate', { div });
-      deck.fxChain.syncGate();
+      deck.fxChain.set('gate', { div }); // re-times the gate itself
       rate.textContent = GATE_RATES[div];
     });
     render();

@@ -94,4 +94,9 @@ export function setupKeyboard() {
     held.get(k)?.endBend();
     held.delete(k);
   });
+  // A key released while another window has focus never reports keyup: don't leave a nudge on.
+  window.addEventListener('blur', () => {
+    held.clear();
+    for (const d of Object.values(mixer.decks)) d.endBend();
+  });
 }

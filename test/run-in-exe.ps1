@@ -2,9 +2,9 @@
 # Usage: run-in-exe.ps1 <entry.js> <outDir>
 param([string]$Entry, [string]$OutDir, [int]$TimeoutSec = 150, [string]$AppDir = '')
 $root = Split-Path $PSScriptRoot -Parent
-if (-not $AppDir) { $AppDir = "$root\pkg-nogate\Commons DJ NoGate" }
+if (-not $AppDir) { $AppDir = "$root\pkg-nogate\OscarDJ" }
 $app = "$AppDir\resources\app"
-$exe = "$AppDir\Commons DJ NoGate.exe"
+$exe = "$AppDir\OscarDJ.exe"
 Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force "$app\test", $OutDir | Out-Null
 Copy-Item $Entry "$app\test\entry.js" -Force

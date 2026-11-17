@@ -14,7 +14,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cdj-libeval-'));
 app.setPath('userData', tmp);
 app.commandLine.appendSwitch('disable-audio-output');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
-const real = path.join(process.env.APPDATA, 'Commons DJ NoGate', 'library.json');
+const real = ['OscarDJ', 'Commons DJ NoGate'].map((n) => path.join(process.env.APPDATA, n, 'library.json')).find(fs.existsSync);
 const lib = JSON.parse(fs.readFileSync(real, 'utf8'));
 const tracks = lib.tracks.filter((t) => fs.existsSync(t.file));
 // The app reads audio through its own library; give it a copy so the real one is never written.

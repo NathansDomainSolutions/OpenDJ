@@ -1,44 +1,78 @@
 // Loading a track onto a deck: decode, analyse (in a worker), and AI stems in the background.
 import { AI_STEM_NAMES } from '../engine.js';
-import { mixToMono, computeWaveform, analyzeTrack, fitGridAt, detectKey, ANALYSIS_VERSION, KEY_VERSION } from '../analysis.js';
-import { api, $, mixer, DECKS, state, toast, cleanErr, ui, saveTrack } from './core.js';
+import { mixToMono, ANALYSIS_VERSION, KEY_VERSION } from '../analysis.js';
+import { api, $, mixer, DECKS, activeDecks, state, toast, cleanErr, ui, saveTrack } from './core.js';
 import { doSync } from './sync-ui.js';
 import { renderDeckState, renderStems } from './deck.js';
 import { hideDropOverlay, importFiles } from './library.js';
 
-// Analysis runs in a worker so loading never stalls the decks; the main thread is the fallback.
+// Reading and analysis run in a worker so loading never stalls the decks. A worker that
+// fails or hangs is stopped, its jobs fail, and the next job starts a fresh one.
 let analysisWorker = null;
 let analysisSeq = 0;
 const analysisWaiting = new Map();
-try {
+const ANALYSIS_TIMEOUT = 120000; // a job that takes this long is stuck: don't leave the deck loading forever
+function stopAnalysisWorker(error) {
+  analysisWorker?.terminate();
+  analysisWorker = null;
+  for (const job of analysisWaiting.values()) {
+    clearTimeout(job.timer);
+    job.reject(error);
+  }
+  analysisWaiting.clear();
+}
+function startAnalysisWorker() {
   analysisWorker = new Worker(new URL('../analysis-worker.js', import.meta.url), { type: 'module' });
   analysisWorker.onmessage = ({ data }) => {
     const job = analysisWaiting.get(data.id);
     analysisWaiting.delete(data.id);
+    if (job) clearTimeout(job.timer);
     if (data.error) job?.reject(new Error(data.error));
     else job?.resolve(data.result);
   };
-} catch (err) {
-  console.error('Analysis worker unavailable, analysing on the main thread:', err);
+  analysisWorker.onerror = (event) => {
+    event.preventDefault();
+    stopAnalysisWorker(new Error('Track analysis stopped. Try loading the track again.'));
+  };
+  analysisWorker.onmessageerror = () => stopAnalysisWorker(new Error('Track analysis could not be read. Try loading the track again.'));
 }
 /**
- * Run an analysis job in the worker (see analysis-worker.js): 'prepare' (waveform, and as
- * `want` asks the beat grid and key) or 'fitAt' (re-fit the grid at `bpm`).
- * `mono` is handed over to the worker: it is empty here afterwards.
+ * Run a job in the worker (see analysis-worker.js): 'prepare' (waveform, and as `want` asks
+ * the beat grid and key), 'fitAt' (re-fit the grid at `bpm`) or 'read' (`mono` is then the
+ * file's URL; resolves to its bytes). Samples are handed over to the worker: `mono` is empty
+ * here afterwards.
  */
 export function analyse(op, mono, sampleRate, { bpm, want } = {}) {
-  if (!analysisWorker) {
-    if (op === 'fitAt') return Promise.resolve(fitGridAt(mono, sampleRate, bpm));
-    const result = { wave: computeWaveform(mono, sampleRate, 300) };
-    if (want?.grid) Object.assign(result, analyzeTrack(mono, sampleRate, { key: !!want.key }));
-    else if (want?.key) result.key = detectKey(mono, sampleRate);
-    return Promise.resolve(result);
-  }
   return new Promise((resolve, reject) => {
     const id = ++analysisSeq;
-    analysisWaiting.set(id, { resolve, reject });
-    analysisWorker.postMessage({ id, op, mono, sampleRate, bpm, want }, [mono.buffer]);
+    try {
+      if (!analysisWorker) startAnalysisWorker();
+      const timer = setTimeout(() => stopAnalysisWorker(new Error('Track preparation timed out. Try loading the track again.')), ANALYSIS_TIMEOUT);
+      analysisWaiting.set(id, { resolve, reject, timer });
+      if (op === 'read') analysisWorker.postMessage({ id, op, url: mono });
+      else analysisWorker.postMessage({ id, op, mono, sampleRate, bpm, want }, [mono.buffer]);
+    } catch (err) {
+      clearTimeout(analysisWaiting.get(id)?.timer);
+      analysisWaiting.delete(id);
+      reject(err);
+    }
   });
+}
+
+// Decoding a whole song allocates its samples on the UI thread: one at a time, tracks and
+// stems alike, so several never land together. `current()` false = the load was superseded.
+let trackDecodeQueue = Promise.resolve();
+function decodeTrack(url, current) {
+  const decoding = trackDecodeQueue.then(async () => {
+    if (!current()) return null;
+    const data = await analyse('read', url);
+    if (!current()) return null;
+    const buffer = await mixer.ctx.decodeAudioData(data);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return buffer;
+  });
+  trackDecodeQueue = decoding.then(() => {}, () => {});
+  return decoding;
 }
 // Grids made by an older analyser are redone on load, unless you set them by hand (TAP, Beat 1, ÷2, ×2 ...).
 const needsAnalysis = (t) => t.bpm == null || (t.gridVersion !== ANALYSIS_VERSION && t.gridSource !== 'user');
@@ -54,13 +88,19 @@ export async function loadToDeck(name, trackId) {
   if (track.missing) return toast('That file is missing — it may have been moved or deleted.', 'error');
 
   const d = ui[name];
+  // A newer load onto this deck supersedes this one at its next step.
+  const request = Symbol();
+  deck.loadRequest = request;
+  const current = () => deck.loadRequest === request;
   d.root.classList.add('loading');
   d.title.textContent = track.title;
   d.artist.textContent = 'Loading…';
   try {
     await mixer.resume();
-    const data = await api.library.readAudio(track.id);
-    const buffer = await mixer.ctx.decodeAudioData(data);
+    const url = await api.library.audioUrl(track.id);
+    if (!current()) return;
+    const buffer = await decodeTrack(url, current);
+    if (!current()) return;
     const channels = [];
     for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
     // The waveform, beat grid and key are all worked out in the worker, in one pass.
@@ -69,6 +109,7 @@ export async function loadToDeck(name, trackId) {
     // The mono mix is handed over to the worker. A mono file's mix is the track itself: send a copy of that.
     const mono = channels.length === 1 ? channels[0].slice() : mixToMono(channels);
     const { wave, tempo, meter, key } = await analyse('prepare', mono, buffer.sampleRate, { want });
+    if (!current()) return;
 
     const patch = {};
     if (!track.duration) patch.duration = buffer.duration;
@@ -94,6 +135,7 @@ export async function loadToDeck(name, trackId) {
     if (want.key) Object.assign(patch, keyPatch(key));
     if (Object.keys(patch).length) await saveTrack(track, patch);
     if (track.bpm === 0) track.bpm = null;
+    if (!current()) return;
 
     state.waves[name] = wave;
     state.overviewImg[name] = null;
@@ -103,15 +145,18 @@ export async function loadToDeck(name, trackId) {
     d.tempo.value = 0;
     deck.setRate(1);
     if (deck.resync && deck.grid) doSync(name);
-    prepareAiStems(name, track, buffer); // background; DSP stems work meanwhile
+    prepareAiStems(name, track, buffer, { cachedOnly: true }); // cached AI stems only; DSP stems work meanwhile
   } catch (err) {
+    if (!current()) return;
     console.error(err);
     toast(`Couldn't load “${track.title}”: ${cleanErr(err)}`, 'error');
     d.title.textContent = deck.track?.title || 'No track loaded';
     d.artist.textContent = deck.track?.artist || '';
   } finally {
-    d.root.classList.remove('loading');
-    renderDeckState(name);
+    if (current()) {
+      d.root.classList.remove('loading');
+      renderDeckState(name);
+    }
   }
 }
 
@@ -146,10 +191,14 @@ export function setupDeckDrop(el, name) {
 
 async function loadAiStems(name, trackId) {
   const deck = mixer.decks[name];
-  // All four at once: reading and decoding run off the main thread, side by side.
-  const decoded = await Promise.all(AI_STEM_NAMES.map(async (n) => mixer.ctx.decodeAudioData(await api.stems.read(trackId, n))));
-  const buffers = Object.fromEntries(AI_STEM_NAMES.map((n, i) => [n, decoded[i]]));
-  if (deck.track?.id === trackId) deck.setAiStems(buffers);
+  const track = deck.track;
+  const current = () => deck.track === track && track?.id === trackId; // another track was loaded meanwhile
+  const buffers = {};
+  for (const n of AI_STEM_NAMES) {
+    if (!current()) return;
+    buffers[n] = await decodeTrack(await api.stems.audioUrl(trackId, n), current);
+  }
+  if (current()) deck.setAiStems(buffers);
 }
 
 /** Resample to 44.1 kHz stereo for the model. */
@@ -164,14 +213,16 @@ async function toModelPcm(buffer) {
   return [r.getChannelData(0), r.getChannelData(1)];
 }
 
-/** After a track loads: use cached AI stems, or separate it once in the background. */
-async function prepareAiStems(name, track, buffer) {
+/** Use a track's cached AI stems, or (unless `cachedOnly`: a plain load never starts one) separate it once. */
+async function prepareAiStems(name, track, buffer, { cachedOnly = false } = {}) {
   try {
     const st = await api.stems.status(track.id);
     if (!st.available) return; // not installed: DSP stems only
     if (st.ready) return await loadAiStems(name, track.id);
+    if (cachedOnly) return;
     if (state.stemJobs.has(track.id)) return;
     state.stemJobs.set(track.id, { done: 0, total: 0 });
+    state.renderAiChip?.();
     DECKS.forEach(renderStems);
     const [left, right] = await toModelPcm(buffer);
     await api.stems.separate(track.id, left, right);
@@ -184,22 +235,23 @@ async function prepareAiStems(name, track, buffer) {
     toast(`AI stems failed: ${cleanErr(err)} — using DSP stems.`, 'error');
   } finally {
     DECKS.forEach(renderStems);
+    state.renderAiChip?.();
   }
 }
 
-// AI stems: one click downloads the separation model; after that every track
-// is separated once in the background and the stem buttons switch to it.
+// AI stems: cached stems load with the track; separating a new track starts only when
+// asked for here (the first click also downloads the separation model).
 export async function setupAiChip() {
   const chip = $('#aiChip');
+  let preparing = false;
   const render = async () => {
     const s = await api.stems.setup();
     chip.hidden = !s.runtime;
+    chip.disabled = preparing || s.downloading || state.stemJobs.size > 0;
     if (s.model) {
       chip.className = 'chip ok';
-      chip.textContent = `AI stems${s.provider === 'cuda' || s.provider === 'dml' ? ' · GPU' : s.provider === 'cpu' ? ' · CPU' : ''}`;
-      chip.title = s.gpuModel
-        ? `Studio-grade AI stems on your graphics card: ${s.gpuModel}. Each track is separated once, in the background, then cached.`
-        : 'Clean AI stem separation is on. Each track is separated once, in the background, then cached.';
+      chip.textContent = preparing || state.stemJobs.size ? 'Preparing AI stems…' : 'Prepare AI stems';
+      chip.title = `Prepare AI stems for the loaded decks, one track at a time${s.gpuModel ? ` (on your graphics card: ${s.gpuModel})` : ''}. Cached stems load automatically; dropping a track never starts new separation.`;
     } else if (!s.downloading) {
       chip.className = 'chip warn';
       chip.textContent = 'Get AI stems';
@@ -211,21 +263,29 @@ export async function setupAiChip() {
     chip.textContent = `AI stems ${Math.round((got / total) * 100)}%`;
   });
   chip.addEventListener('click', async () => {
-    const s = await render();
-    if (s.model || s.downloading) return;
-    chip.className = 'chip';
-    chip.textContent = 'AI stems 0%';
+    if (preparing) return;
+    preparing = true;
+    chip.disabled = true;
     try {
-      await api.stems.downloadModel();
-      toast('AI stems model installed — separating the loaded tracks.');
-      for (const n of DECKS) {
+      const s = await render();
+      if (s.downloading || state.stemJobs.size) return;
+      if (!s.model) {
+        chip.disabled = true;
+        chip.className = 'chip';
+        chip.textContent = 'AI stems 0%';
+        await api.stems.downloadModel();
+        toast('AI stems model installed — preparing the loaded tracks.');
+      }
+      for (const n of activeDecks()) {
         const deck = mixer.decks[n];
-        if (deck.track && deck.buffer) prepareAiStems(n, deck.track, deck.buffer);
+        if (deck.track && deck.buffer) await prepareAiStems(n, deck.track, deck.buffer);
       }
     } catch (err) {
       toast(`Couldn't get the AI stems model: ${cleanErr(err)}`, 'error');
+    } finally {
+      preparing = false;
+      render();
     }
-    render();
   });
   state.renderAiChip = render;
   render();

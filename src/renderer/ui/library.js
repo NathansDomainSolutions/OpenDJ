@@ -83,7 +83,7 @@ export function renderLibrary() {
       const pct = fit?.rate ? (fit.rate - 1) * 100 : 0;
       const tempoTip = fit?.rate ? `${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(1)}% to match ${on}${fit.k === 1 ? '' : fit.k === 2 ? ' (double time)' : ' (half time)'}` : '';
       const keyTip = fit?.key ? `${KEY_FIT[fit.key]} ${on} (${camelot(ref.key)})` : keyName(t.key);
-      return `<tr draggable="true" data-id="${t.id}" class="${cls}">
+      return `<tr draggable="true" data-id="${escapeHtml(t.id)}" class="${cls}">
         <td>${DECKS.map((n) => `<button class="load-btn ${n.toLowerCase()}" data-load="${n}" title="Load to deck ${n}">${n}</button>`).join('')}</td>
         <td title="${escapeHtml(t.title)}"><span class="lib-thumb">${trackThumb(t) ? `<img src="${escapeHtml(trackThumb(t))}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : ''}</span>${escapeHtml(t.title)}</td>
         <td title="${escapeHtml(t.artist)}">${escapeHtml(t.artist)}</td>

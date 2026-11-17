@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Stand-in for yt-dlp used by the smoke test (no network). Mimics the handful of
-# command lines Commons DJ uses: --version, CC search, -J info, and download.
+# command lines OscarDJ uses: --version, CC search, -J info, and download.
 import json, os, shutil, sys, time
 
 args = sys.argv[1:]

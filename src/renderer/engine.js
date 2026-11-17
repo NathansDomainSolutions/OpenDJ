@@ -39,7 +39,7 @@ export class Mixer {
     this.master.connect(this.limiter);
     this.sfx = this.ctx.createGain(); // SFX pads, on top of the decks but under the limiter
     this.sfx.gain.value = 0.8;
-    this.sfx.connect(this.limiter);
+    this.sfx.connect(this.master);
     this.limiter.connect(this.masterAnalyser);
     this.masterAnalyser.connect(this.ctx.destination);
 
@@ -341,6 +341,7 @@ export class Deck {
   }
 
   setKeyShift(semitones) {
+    if (!Number.isFinite(semitones)) return;
     this.keyShift = Math.max(-12, Math.min(12, Math.round(semitones * 100) / 100));
     this.sendFx();
     this.emit('key');
@@ -401,7 +402,8 @@ export class Deck {
   positionAt(t) {
     if (!this.playing) return this.pausedPos;
     if (t < this.startTime) return this.startPos;
-    let pos = this.startPos + (t - this.startTime) * this.speed;
+    // Integrate the speed actually sent to the sources, including during a tempo change.
+    let pos = this.startPos + (t - this.startTime) * this.appliedSpeed;
     if (this.loop && pos >= this.loop.end) {
       const len = this.loop.end - this.loop.start;
       pos = this.loop.start + ((pos - this.loop.start) % len);
@@ -424,6 +426,10 @@ export class Deck {
     this.buffer = buffer;
     this.track = track;
     this.playing = false;
+    this.bendFactor = 1;
+    this.scratching = false;
+    this.scratchNode?.port.postMessage({ type: 'stop' });
+    this.busyUntil = 0;
     this.pausedPos = 0;
     this.cuePoint = track.beatOffset && track.beatOffset < 2 ? track.beatOffset : 0;
     this.loop = null;
@@ -490,7 +496,7 @@ export class Deck {
 
   /** Restart the sources where the deck already is (after a routing change), without a jump. */
   restartInPlace() {
-    const when = this.ctx.currentTime + LOOKAHEAD;
+    const when = Math.max(this.startTime, this.ctx.currentTime + LOOKAHEAD);
     this.startSource(this.positionAt(when), when);
   }
 
@@ -502,7 +508,7 @@ export class Deck {
     if (!this.buffer || this.playing) return;
     this.mixer.resume();
     if (this.pausedPos >= this.duration - 0.01) this.pausedPos = 0;
-    this.startSource(at ?? this.pausedPos, when);
+    this.startSource(at >= this.duration - 0.01 ? 0 : at ?? this.pausedPos, when);
     this.playing = true;
     this.emit('state');
   }
@@ -564,6 +570,7 @@ export class Deck {
   }
 
   setRate(rate, { silent = false } = {}) {
+    if (!Number.isFinite(rate) || rate <= 0) return;
     this.rate = rate;
     this.applySpeed();
     queueMicrotask(() => this.fxChain.syncGate());
@@ -812,8 +819,11 @@ export class FxChain {
 
   /** Turn an effect on or off and/or set its amount (0..1) or the gate's rate. */
   set(name, patch) {
+    const gate = this.state.gate;
+    const resync = name === 'gate' && ((patch.on ?? gate.on) !== gate.on || (patch.div ?? gate.div) !== gate.div);
     Object.assign(this.state[name], patch);
     this.apply();
+    if (resync) this.syncGate();
   }
 
   apply() {
@@ -823,7 +833,6 @@ export class FxChain {
     const depth = gate.on ? gate.amount : 0;
     glide(this.gate.gain, 1 - depth / 2);
     glide(this.gateDepth.gain, depth / 2);
-    if (gate.on && !this.gateOsc) this.syncGate();
     const fl = flanger.on ? flanger.amount : 0;
     glide(this.flWet.gain, fl * 0.8);
     glide(this.flDry.gain, 1 - fl * 0.25); // keeps the overall level even as the mix rises
@@ -857,6 +866,7 @@ export class FxChain {
     osc.setPeriodicWave(this.gateWave);
     osc.frequency.value = d.rate / step; // steps per real second
     osc.connect(this.gateDepth);
+    osc.onended = () => osc.disconnect();
     osc.start(when);
     this.gateOsc?.stop(when); // hand over exactly on the step
     this.gateOsc = osc;

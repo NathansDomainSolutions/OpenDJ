@@ -5,10 +5,22 @@ import { $, $$, mixer, DECKS, activeDecks, partnerDeck, ACCENT, INK, HOTCUE_COLO
 import { snapOn, snapDiv, snapDeck, beatGapMs } from './sync-ui.js';
 import { syncVideos } from './video.js';
 
+// Canvas sizes are observed, not read every frame: reading clientWidth forces a layout.
+const canvasSizes = new WeakMap();
+const canvasObserver = new ResizeObserver((entries) => {
+  for (const entry of entries) canvasSizes.set(entry.target, entry.contentRect);
+});
+
 function fitCanvas(canvas) {
+  let size = canvasSizes.get(canvas);
+  if (!size) {
+    size = { width: canvas.clientWidth, height: canvas.clientHeight };
+    canvasSizes.set(canvas, size);
+    canvasObserver.observe(canvas);
+  }
   const dpr = window.devicePixelRatio || 1;
-  const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
-  const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+  const w = Math.max(1, Math.round(size.width * dpr));
+  const h = Math.max(1, Math.round(size.height * dpr));
   if (canvas.width !== w || canvas.height !== h) {
     canvas.width = w;
     canvas.height = h;
@@ -147,7 +159,7 @@ function drawScrolling(name, pos) {
   const cx = Math.round(W / 2);
 
   if (wave && deck.buffer) {
-    const pps = dpr / secPerCssPx(deck, canvas.clientWidth); // device pixels per track-second
+    const pps = dpr / secPerCssPx(deck, W / dpr); // device pixels per track-second
     const t0 = pos - cx / pps;
     const x = (time) => cx + (time - pos) * pps;
 

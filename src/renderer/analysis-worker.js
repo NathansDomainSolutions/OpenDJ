@@ -3,12 +3,18 @@
 //   'prepare': everything a load needs in one go: the waveform, and with want.grid the
 //              tempo, beat grid and meter, with want.key the key.
 //   'fitAt':   re-fit the beat grid at a given BPM.
+//   'read':    fetch the encoded audio file at `url`, so its bytes never pass through the UI thread's bridge.
 // Reply:   { id, result } or { id, error }
 import { analyzeTrack, fitGridAt, detectKey, computeWaveform } from './analysis.js';
 
-self.onmessage = ({ data: { id, op, mono, sampleRate, bpm, want } }) => {
+self.onmessage = async ({ data: { id, op, mono, sampleRate, bpm, want, url } }) => {
   try {
-    if (op === 'prepare') {
+    if (op === 'read') {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Could not read audio (HTTP ${response.status}).`);
+      const result = await response.arrayBuffer();
+      self.postMessage({ id, result }, [result]);
+    } else if (op === 'prepare') {
       const result = { wave: computeWaveform(mono, sampleRate, 300) };
       if (want?.grid) Object.assign(result, analyzeTrack(mono, sampleRate, { key: !!want.key }));
       else if (want?.key) result.key = detectKey(mono, sampleRate);

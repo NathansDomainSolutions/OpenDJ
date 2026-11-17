@@ -106,8 +106,10 @@ class DeckFx extends AudioWorkletProcessor {
     this.inR = new Float32Array(FRAME);
     this.outL = new Float32Array(HOP);
     this.outR = new Float32Array(HOP);
-    this.accL = new Float32Array(FRAME * 2);
-    this.accR = new Float32Array(FRAME * 2);
+    this.accL = new Float32Array(FRAME);
+    this.accR = new Float32Array(FRAME);
+    this.headL = this.accL.subarray(0, HOP);
+    this.headR = this.accR.subarray(0, HOP);
     this.rover = FIFO_START;
 
     this.re = new Float64Array(FRAME);
@@ -156,7 +158,7 @@ class DeckFx extends AudioWorkletProcessor {
     if (typeof m.pitch === 'number' && isFinite(m.pitch)) this.pitch = Math.min(4, Math.max(0.25, m.pitch));
     if (m.stems) {
       for (const k of ['vocals', 'drums', 'instruments']) {
-        if (typeof m.stems[k] === 'number') this.stems[k] = Math.min(1, Math.max(0, m.stems[k]));
+        if (Number.isFinite(m.stems[k])) this.stems[k] = Math.min(1, Math.max(0, m.stems[k]));
       }
     }
   }
@@ -209,7 +211,7 @@ class DeckFx extends AudioWorkletProcessor {
     const stemsOn = this.stemsActive;
 
     let silent = true;
-    for (let i = 0; i < FRAME; i += 4) {
+    for (let i = 0; i < FRAME; i++) {
       if (inL[i] !== 0 || inR[i] !== 0) {
         silent = false;
         break;
@@ -220,18 +222,20 @@ class DeckFx extends AudioWorkletProcessor {
       this.spectralFrame(pitchOn, stemsOn);
     } else {
       // Untouched: windowed overlap-add reconstructs the input exactly.
-      for (let i = 0; i < FRAME; i++) {
-        const w = win[i] * win[i] * olaScale;
-        accL[i] += inL[i] * w;
-        accR[i] += inR[i] * w;
+      if (!silent) {
+        for (let i = 0; i < FRAME; i++) {
+          const w = win[i] * win[i] * olaScale;
+          accL[i] += inL[i] * w;
+          accR[i] += inR[i] * w;
+        }
       }
       this.pvFresh = true;
       if (silent) this.histFill = 0;
     }
 
     // The next HOP output samples; process() reads them as rover runs FIFO_START..FRAME.
-    this.outL.set(accL.subarray(0, HOP));
-    this.outR.set(accR.subarray(0, HOP));
+    this.outL.set(this.headL);
+    this.outR.set(this.headR);
     accL.copyWithin(0, HOP);
     accR.copyWithin(0, HOP);
     accL.fill(0, accL.length - HOP);
