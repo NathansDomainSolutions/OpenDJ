@@ -33,6 +33,9 @@ if (app.getPath('userData') === path.join(app.getPath('appData'), app.getName())
   app.setPath('userData', legacyData);
 }
 
+// Linux: the window's app id, so the launcher and taskbar tie it to oscardj.desktop (name and icon).
+if (process.platform === 'linux') app.setDesktopName('oscardj.desktop');
+
 function initPaths() {
   paths.root = app.getPath('userData');
   paths.bin = path.join(paths.root, 'bin');
