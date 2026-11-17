@@ -266,17 +266,17 @@ app.on('browser-window-created', (_e, win) => {
       }],
     ];
 
-    SCEN.push(['tempo-before-launch', 'Slow the clock while B waits for its launch bar', async (w, notes) => {
+    // A synced deck starts at once, on the clock's beat: the tempo move lands right after its launch.
+    SCEN.push(['tempo-before-launch', 'Slow the clock just as B launches from a hot cue', async (w, notes) => {
       await load('A', 'sh128a'); await load('B', 'sh128b');
       await click('#deckA .play'); await sleep(1500);
       await syncB(notes);
       await js(`window.cdjDebug.mixer.decks.B.track.cues[0] = ${T.sh128b.beatOffset}`);
       await click('#deckB .hc[data-i="0"]');
       await click('#deckB .play');
-      const old = await js('window.cdjDebug.mixer.decks.B.startTime');
       await tempo('A', -6);
       const launch = await js('window.cdjDebug.mixer.decks.B.startTime');
-      if (!(launch > old)) throw new Error('Pending launch did not follow the slower clock');
+      if (!(await js('window.cdjDebug.mixer.decks.B.playing'))) throw new Error('B did not launch');
       const now = await js('window.cdjDebug.mixer.ctx.currentTime');
       await sleep(Math.max(0, (launch - now + 6) * 1000));
       w.push({ label: 'after launch', from: launch + 0.1, to: launch + 6 });

@@ -152,13 +152,21 @@ function drawScrolling(name, pos) {
   const W = canvas.width;
   const H = canvas.height;
   const dpr = window.devicePixelRatio || 1;
-  ctx.clearRect(0, 0, W, H);
   const deck = mixer.decks[name];
   const wave = state.waves[name];
+  const grabbed = canvas.classList.contains('grabbing');
+  // Nothing moved and nothing looks different (a paused deck, mostly): leave the picture as it is.
+  const d = ui[name];
+  const shown = wave && deck.buffer ? wave : null;
+  const key = [W, H, pos, shown ? secPerCssPx(deck, W / dpr) : 0, deck.loop?.start, deck.loop?.end, deck.cuePoint,
+    deck.track?.cues, grabbed, document.body.dataset.theme].join('|');
+  if (d.waveKey === key && d.waveShown === shown && d.waveGrid === deck.grid && d.waveBands === INK.bands) return;
+  Object.assign(d, { waveKey: key, waveShown: shown, waveGrid: deck.grid, waveBands: INK.bands });
+  ctx.clearRect(0, 0, W, H);
   const mid = H / 2;
   const cx = Math.round(W / 2);
 
-  if (wave && deck.buffer) {
+  if (shown) {
     const pps = dpr / secPerCssPx(deck, W / dpr); // device pixels per track-second
     const t0 = pos - cx / pps;
     const x = (time) => cx + (time - pos) * pps;
@@ -171,6 +179,7 @@ function drawScrolling(name, pos) {
 
     const s = stripFor(name, wave, pps, t0, W, H);
     ctx.drawImage(s.canvas, (t0 - s.t0) * s.pps, 0, (W / pps) * s.pps, H, 0, 0, W, H);
+    if (Math.abs(pps / s.pps - 1) >= 0.03) d.waveKey = null; // a zoom still settling: draw again until the strip is sharp
 
     // Beat grid: lines where the beats are (they follow the tempo map of a track that wanders).
     const grid = deck.grid;
@@ -215,7 +224,6 @@ function drawScrolling(name, pos) {
   }
 
   // Playhead: the deck's colour and thicker while you're dragging the track.
-  const grabbed = canvas.classList.contains('grabbing');
   ctx.fillStyle = grabbed ? `rgb(${ACCENT[name].join(',')})` : `rgb(${INK.ink})`;
   ctx.fillRect(cx - (grabbed ? 2 : 1) * dpr, 0, (grabbed ? 4 : 2) * dpr, H);
 }

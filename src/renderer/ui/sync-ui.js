@@ -37,6 +37,7 @@ function onSyncChange() {
   for (const n of DECKS) {
     const deck = mixer.decks[n];
     ui[n].sync.classList.toggle('on', group.has(deck));
+    ui[n].sync.setAttribute('aria-pressed', String(group.has(deck)));
     if (group.has(deck)) {
       syncTempoSlider(n);
       renderTempo(n);
