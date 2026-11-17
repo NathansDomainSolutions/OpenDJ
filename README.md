@@ -27,6 +27,17 @@ A two- or four-deck DJ app for your own music and web tracks, with yt-dlp built 
 - Tracks are analysed again the first time each is loaded after this update.
 - Tests: `test/real-sync.js` plays real songs on two decks, records what each deck sends out and measures how far apart the hits are; `test/stems-gpu.js` checks the keep-alive separator with a stand-in for the models. The sync harness still measures under a quarter of a millisecond in all 10 scenarios.
 
+### Linux
+
+- **Linux builds (x64 and ARM64).** The release workflow attaches `OscarDJ-<version>-linux-x64.tar.gz` and `-linux-arm64.tar.gz` next to the Windows and macOS zips. Unpack one and run `OscarDJ.sh`; `install-desktop-entry.sh` adds it to the app menu. yt-dlp and the AI stems runtime are bundled as on the other platforms. `npm run package:linux-x64` builds the same folder from source.
+
+### Sturdier behind the scenes
+
+- **Download errors say what went wrong.** Any yt-dlp error containing the letters "age" (page, message, image…) was reported as "YouTube wants a sign-in". Only real age / sign-in errors are now.
+- **macOS:** closing the window while a download or stem job was running no longer throws when it reports progress, and the fullscreen button shows the right state.
+- Two decks asking for the same music video share one download; a stem separator that stops unexpectedly fails its jobs instead of leaving them waiting; the GPU stems path looks for `bin/python` off Windows.
+- Tests run on every push and pull request (`.github/workflows/test.yml`).
+
 ### Matching, and a simpler codebase
 
 Everything that was there still is.
@@ -141,9 +152,11 @@ Validation: `npm test`, `npm run test:ui`, `npm run test:load`, `npm run test:fx
 **macOS:** unzip `OscarDJ-<version>-mac-universal.zip` (Apple Silicon and Intel) and drag **OscarDJ.app** to
 Applications. It isn't notarized, so the first time **right-click the app → Open → Open**.
 
-**Linux:** there's no native build. Run the Windows x64 version with [Wine](https://www.winehq.org/).
+**Linux:** extract `OscarDJ-<version>-linux-x64.tar.gz` (or `-linux-arm64`) and run `OscarDJ.sh` inside it. Run
+`install-desktop-entry.sh` once to add OscarDJ to your app menu.
 
-Your library and downloads live in `%APPDATA%\OscarDJ` (the **Open download folder** button takes you there).
+Your library and downloads live in `%APPDATA%\OscarDJ` on Windows, `~/Library/Application Support/OscarDJ` on macOS and
+`~/.config/OscarDJ` on Linux (the **Open download folder** button takes you there).
 
 ## What it does
 
@@ -193,6 +206,7 @@ npm run test:fx          # offline renders through the real audio worklet
 npm run test:audio       # recorded deck alignment; takes several minutes
 npm run package:win-arm64
 npm run package:win-x64
+npm run package:linux-x64
 ```
 
 Project layout:

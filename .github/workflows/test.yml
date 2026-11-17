@@ -1,11 +1,27 @@
 name: Playback regression tests
+
+# Unit tests (plain Node scripts) on Linux for every push and pull request, and the full
+# playback suite (real UI, drag-and-drop loads, the audio worklet, recorded deck alignment) on Windows.
+
 on:
   push:
     branches: [main]
   pull_request:
+
 permissions:
   contents: read
+
 jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check src/main.js && node --check src/preload.js && node --check src/stems-worker.js
+      - run: npm test
+
   test:
     runs-on: windows-latest
     timeout-minutes: 15

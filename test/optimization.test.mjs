@@ -90,9 +90,11 @@ const context = vm.createContext({ path, pathToFileURL, paths: { root: path.reso
   newId: () => String(++nextId), publicTrack: t => t, saveLibrary: () => saves++,
 });
 vm.runInContext(main.slice(main.indexOf('async function importLocalFiles'), main.indexOf('// ---------------------------------------------------------------- AI stems')), context);
-const imported = await context.importLocalFiles(['old.wav', 'A - first.wav', 'second.wav', 'second.wav', null, {}, 'ignore.txt']);
-assert.deepEqual(Array.from(imported, t => t.file), ['A - first.wav', 'second.wav']);
-assert.deepEqual(Array.from(context.library.tracks, t => t.file), ['second.wav', 'A - first.wav', 'old.wav']);
+const abs = (name) => path.resolve('music', name); // imports take absolute paths only
+context.library.tracks[0].file = abs('old.wav');
+const imported = await context.importLocalFiles([abs('old.wav'), abs('A - first.wav'), abs('second.wav'), abs('second.wav'), 'relative.wav', null, {}, abs('ignore.txt')]);
+assert.deepEqual(Array.from(imported, t => t.file), [abs('A - first.wav'), abs('second.wav')]);
+assert.deepEqual(Array.from(context.library.tracks, t => t.file), [abs('second.wav'), abs('A - first.wav'), abs('old.wav')]);
 assert.equal(imported[0].artist, 'A');
 assert.equal(saves, 1);
 vm.runInContext(main.slice(main.indexOf('function safeId'), main.indexOf('function cachedVideo')), context);
@@ -100,7 +102,7 @@ for (const id of ['', '..', '../other', 'a/b', null, 1]) assert.throws(() => con
 assert.equal(context.safeId('valid-id_1'), 'valid-id_1');
 context.findTrack = () => ({ source: { kind: 'web', url: 'https://example.com/video' } });
 context.cachedVideo = () => path.resolve('cached video.mp4');
-vm.runInContext(main.slice(main.indexOf('async function fetchVideo'), main.indexOf('// ---------------------------------------------------------------- IPC')), context);
+vm.runInContext(main.slice(main.indexOf('const videoJobs'), main.indexOf('// ---------------------------------------------------------------- IPC')), context);
 assert.equal(await context.fetchVideo('valid-id_1'), pathToFileURL(path.resolve('cached video.mp4')).href, 'cached videos stream from disk');
 
 // Tracks and stems decode one at a time.
