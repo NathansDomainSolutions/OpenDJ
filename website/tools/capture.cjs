@@ -51,7 +51,7 @@ app.on('browser-window-created', (_e, win) => {
     const res = { files: [] };
     try {
       win.setContentSize(W, H); await sleep(1500);
-      await theme('dark'); await setDecks(2); await sleep(500);
+      await theme('aero'); await setDecks(2); await sleep(500);
       await load(decks[0], 'A'); await load(decks[1], 'B');
       await js(`document.querySelector('#deckA .play').click()`); await sleep(1500);
       await js(`document.querySelector('#deckB .play').click()`); await sleep(800);
@@ -68,11 +68,11 @@ app.on('browser-window-created', (_e, win) => {
       await shot('settings.png');
       await js(`document.querySelector('#settingsDialog').close()`);
 
-      await theme('aloe'); await sleep(1200);
-      await shot('theme-aloe.png');
-      await theme('mist'); await sleep(1200);
-      await shot('theme-mist.png');
-      await theme('dark');
+      await theme('meadow'); await sleep(1200);
+      await shot('theme-meadow.png');
+      await theme('aurora'); await sleep(1200);
+      await shot('theme-aurora.png');
+      await theme('aero');
 
       // Videos off for the crop (a real setting), so the centre panel doesn't overlap the deck's edge.
       const mv = (v) => js(`document.querySelector('#mvSeg [data-mv="${v}"]').click()`);

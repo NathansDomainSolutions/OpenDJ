@@ -151,12 +151,12 @@ app.on('browser-window-created', (_e, win) => {
       report.sfxPads = await js(`document.querySelectorAll('#sfxGrid button').length`);
       await click('.tab[data-tab="library"]');
       await click('#settingsBtn');
-      await click('.theme-card[data-theme="mist"]');
+      await click('.theme-card[data-theme="chrome"]');
       await click('.font-card[data-font="mono"]');
       await click('#deckCountSeg button[data-decks="4"]');
       await sleep(600);
       report.settings = await js(`({ theme: document.body.dataset.theme, font: document.body.dataset.font, four: document.body.classList.contains('decks-4'),
-        themeChecked: document.querySelector('.theme-card[data-theme="mist"]').getAttribute('aria-checked'), saved: [localStorage.theme, localStorage.font, localStorage.deckCount] })`);
+        themeChecked: document.querySelector('.theme-card[data-theme="chrome"]').getAttribute('aria-checked'), saved: [localStorage.theme, localStorage.font, localStorage.deckCount] })`);
       await js(`document.querySelector('#settingsDialog').close()`);
       await sleep(400);
       await shot('match-3-four-decks.png');

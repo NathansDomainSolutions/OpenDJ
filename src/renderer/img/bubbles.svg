@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <radialGradient id="rim" cx="50%" cy="50%" r="50%">
+      <stop offset="0.5" stop-color="#fff" stop-opacity="0"/>
+      <stop offset="0.88" stop-color="#fff" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0.75"/>
+    </radialGradient>
+    <radialGradient id="glint" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.95"/>
+      <stop offset="0.25" stop-color="#fff" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ribbon" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#fff" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#fff" stop-opacity="0.38"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <symbol id="b" viewBox="0 0 100 100">
+      <circle cx="50" cy="50" r="49.5" fill="url(#rim)"/>
+      <ellipse cx="33" cy="25" rx="16" ry="8" fill="#fff" opacity="0.85" transform="rotate(-35 33 25)"/>
+      <ellipse cx="70" cy="79" rx="9" ry="4" fill="#fff" opacity="0.32" transform="rotate(-35 70 79)"/>
+    </symbol>
+  </defs>
+  <!-- light ribbons -->
+  <path d="M-60 300C300 150 620 440 980 270S1500 120 1700 230V300C1450 220 1250 400 950 370S350 270-60 390Z" fill="url(#ribbon)"/>
+  <path d="M-60 730C350 570 700 870 1100 670S1500 570 1700 650V712C1500 650 1300 810 1050 770S400 690-60 812Z" fill="url(#ribbon)" opacity="0.7"/>
+  <path d="M-60 520C260 460 520 600 820 520S1380 420 1700 500V528C1380 470 1100 590 820 560S260 500-60 560Z" fill="url(#ribbon)" opacity="0.45"/>
+  <!-- lens flare near the sun -->
+  <circle cx="1392" cy="64" r="150" fill="url(#glint)" opacity="0.7"/>
+  <circle cx="1250" cy="150" r="26" fill="url(#glint)" opacity="0.5"/>
+  <circle cx="1170" cy="200" r="12" fill="url(#glint)" opacity="0.6"/>
+  <!-- bubbles -->
+  <use href="#b" x="18" y="60" width="150" height="150" opacity="0.85"/>
+  <use href="#b" x="150" y="12" width="54" height="54" opacity="0.8"/>
+  <use href="#b" x="470" y="6" width="38" height="38" opacity="0.75"/>
+  <use href="#b" x="742" y="300" width="118" height="118" opacity="0.8"/>
+  <use href="#b" x="700" y="250" width="40" height="40" opacity="0.7"/>
+  <use href="#b" x="860" y="420" width="30" height="30" opacity="0.7"/>
+  <use href="#b" x="1470" y="330" width="96" height="96" opacity="0.8"/>
+  <use href="#b" x="1548" y="250" width="34" height="34" opacity="0.7"/>
+  <use href="#b" x="-30" y="520" width="110" height="110" opacity="0.75"/>
+  <use href="#b" x="90" y="620" width="36" height="36" opacity="0.7"/>
+  <use href="#b" x="760" y="610" width="74" height="74" opacity="0.75"/>
+  <use href="#b" x="1380" y="800" width="170" height="170" opacity="0.8"/>
+  <use href="#b" x="1300" y="900" width="48" height="48" opacity="0.7"/>
+  <use href="#b" x="330" y="880" width="90" height="90" opacity="0.75"/>
+  <use href="#b" x="560" y="940" width="40" height="40" opacity="0.7"/>
+  <use href="#b" x="1010" y="18" width="46" height="46" opacity="0.7"/>
+</svg>

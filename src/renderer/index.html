@@ -6,12 +6,17 @@
         content="default-src 'self'; script-src 'self' blob: 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' blob:; connect-src 'self'" />
   <title>OscarDJ</title>
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="aero.css" />
 </head>
 <body>
+  <!-- The knob caps' chrome gradient (see aero.css). -->
+  <svg width="0" height="0" style="position: absolute" aria-hidden="true"><defs>
+    <radialGradient id="knobCap" cx="35%" cy="26%" r="85%"><stop offset="0" class="kc0" /><stop offset="0.5" class="kc1" /><stop offset="1" class="kc2" /></radialGradient>
+  </defs></svg>
   <header class="topbar">
     <div class="brand">
       <span class="brand-mark" aria-hidden="true"><i></i><i></i></span>
-      <span class="brand-name">OSCAR<b>DJ</b></span>
+      <span class="brand-name">Oscar<b>DJ</b></span>
     </div>
     <div class="top-center">
       <div class="master">
@@ -152,7 +157,7 @@
         <button class="btn" id="addFiles">Add files</button>
         <button class="btn ghost" id="openFolder">Open download folder</button>
       </div>
-      <button class="btn ghost" id="browseMax" title="Give the library / search the full window (Esc to go back)">Expand ⤢</button>
+      <button class="btn ghost" id="browseMax" title="Give the library / search the full window [B] (Esc to go back)">Expand ⤢</button>
     </nav>
 
     <div class="panel on" data-panel="library">
@@ -231,7 +236,7 @@
       <div>
         <h3>Mixer</h3>
         <p><kbd>←</kbd> <kbd>→</kbd> crossfader</p><p><kbd>Shift</kbd>+<kbd>←</kbd> <kbd>→</kbd> slam to side</p>
-        <p><kbd>Space</kbd> pause all / resume</p><p><kbd>/</kbd> filter library</p><p><kbd>?</kbd> this help</p>
+        <p><kbd>Space</kbd> pause all / resume</p><p><kbd>/</kbd> filter library</p><p><kbd>B</kbd> expand library</p><p><kbd>?</kbd> this help</p>
       </div>
     </div>
     <p class="muted small">Hot cues: click an empty pad to set it, click again to jump, right-click to clear.
@@ -247,24 +252,28 @@
     <section class="set-section">
       <h3>Theme</h3>
       <div class="theme-cards" role="radiogroup" aria-label="Theme">
-        <button class="theme-card" data-theme="dark" role="radio" aria-checked="true">
-          <span class="swatch dark"><i></i><i></i><i></i></span><b>Midnight</b><span class="muted small">Dark and quiet</span>
+        <button class="theme-card" data-theme="aero" role="radio" aria-checked="true">
+          <span class="swatch aero"><i></i><i></i><i></i></span><b>Aero</b><span class="muted small">Blue sky, glass and gloss</span>
         </button>
-        <button class="theme-card" data-theme="aloe" role="radio" aria-checked="false">
-          <span class="swatch aloe"><i></i><i></i><i></i></span><b>Aloe</b><span class="muted small">Bright, fresh green</span>
+        <button class="theme-card" data-theme="meadow" role="radio" aria-checked="false">
+          <span class="swatch meadow"><i></i><i></i><i></i></span><b>Meadow</b><span class="muted small">Fresh grass, clear sky</span>
         </button>
-        <button class="theme-card" data-theme="mist" role="radio" aria-checked="false">
-          <span class="swatch mist"><i></i><i></i><i></i></span><b>Mist</b><span class="muted small">Soft grey, easy on the eyes</span>
+        <button class="theme-card" data-theme="aurora" role="radio" aria-checked="false">
+          <span class="swatch aurora"><i></i><i></i><i></i></span><b>Aurora</b><span class="muted small">Night glass, northern lights</span>
+        </button>
+        <button class="theme-card" data-theme="chrome" role="radio" aria-checked="false">
+          <span class="swatch chrome"><i></i><i></i><i></i></span><b>Chrome</b><span class="muted small">Y2K silver, candy colours</span>
         </button>
         <button class="theme-card" data-theme="cherry" role="radio" aria-checked="false">
-          <span class="swatch cherry"><i></i><i></i><i></i></span><b>Cherry</b><span class="muted small">Deep red, cherries everywhere</span>
+          <span class="swatch cherry"><i></i><i></i><i></i></span><b>Cherry Pop</b><span class="muted small">Glossy red, cherries everywhere</span>
         </button>
       </div>
     </section>
     <section class="set-section">
       <h3>Font</h3>
       <div class="font-cards" role="radiogroup" aria-label="Font">
-        <button class="font-card" data-font="arial" role="radio" aria-checked="true" style="font-family: Arial, sans-serif">Arial</button>
+        <button class="font-card" data-font="aero" role="radio" aria-checked="true" style="font-family: 'Istok Web', sans-serif">Aero</button>
+        <button class="font-card" data-font="arial" role="radio" aria-checked="false" style="font-family: Arial, sans-serif">Arial</button>
         <button class="font-card" data-font="segoe" role="radio" aria-checked="false" style="font-family: 'Segoe UI', sans-serif">Segoe UI</button>
         <button class="font-card" data-font="playfair" role="radio" aria-checked="false" style="font-family: 'Playfair Display', serif">Playfair Display</button>
         <button class="font-card" data-font="script" role="radio" aria-checked="false" style="font-family: 'Dancing Script', cursive; font-size: 17px">Dancing Script</button>
@@ -277,7 +286,7 @@
         <label for="setOutput">Output device</label>
         <select id="setOutput" class="field"><option value="">System default</option></select>
         <span>Audio buffer</span>
-        <div class="seg" id="bufferSeg" role="radiogroup" aria-label="Audio buffer" title="Low answers fastest. Stable gives a slower computer more room, so audio doesn't crackle. Applies the next time OpenDJ starts.">
+        <div class="seg" id="bufferSeg" role="radiogroup" aria-label="Audio buffer" title="Low answers fastest. Stable gives a slower computer more room, so audio doesn't crackle. Applies the next time OscarDJ starts.">
           <button data-buffer="low" role="radio" aria-checked="false">Low delay</button><button data-buffer="balanced" class="on" role="radio" aria-checked="true">Balanced</button><button data-buffer="stable" role="radio" aria-checked="false">Stable</button>
         </div>
         <label for="setVolume">Master volume</label>

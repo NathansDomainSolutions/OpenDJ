@@ -939,7 +939,7 @@ function createWindow() {
     height: 860,
     minWidth: 1040,
     minHeight: 680,
-    backgroundColor: '#0d0e10',
+    backgroundColor: '#8fd3ff', // the Aero theme's sky, so the window doesn't flash dark while it loads
     title: 'OscarDJ',
     autoHideMenuBar: true,
     webPreferences: {

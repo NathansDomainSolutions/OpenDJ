@@ -8,7 +8,8 @@ export class Knob {
       <svg viewBox="0 0 40 40" aria-hidden="true">
         <path class="k-track" d="${arc(-135, 135)}" fill="none" stroke-width="3.5" stroke-linecap="round"/>
         <path class="k-value" fill="none" stroke-width="3.5" stroke-linecap="round"/>
-        <circle class="k-cap" cx="20" cy="20" r="11" stroke-width="1"/>
+        <circle class="k-cap" cx="20" cy="20" r="11" stroke-width="1" fill="url(#knobCap)"/>
+        <ellipse class="k-shine" cx="17" cy="14.5" rx="5.5" ry="2.8" transform="rotate(-28 17 14.5)"/>
         <line class="k-ptr" x1="20" y1="20" x2="20" y2="11" stroke-width="2" stroke-linecap="round"/>
       </svg>
       <span class="k-label">${escapeHtml(el.dataset.label || '')}</span>`;

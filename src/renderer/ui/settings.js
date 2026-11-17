@@ -42,21 +42,25 @@ export function setupTabs() {
 
 // ------------------------------------------------------------------ themes and fonts
 
-// Canvas colours per theme: deck accents (match --a / --b … in styles.css), text ink, the
-// shade drawn over the played part (matches --bg), and the three waveform bands.
+// Canvas colours per theme. Every theme draws its waveforms on dark glass screens (see aero.css),
+// so these are all bright-on-dark: deck accents, text ink, the shade drawn over the played part,
+// and the three waveform bands.
+const OLD_THEMES = { dark: 'aero', aloe: 'meadow', mist: 'chrome' }; // names from before the Aero look
 const THEMES = {
-  dark: { A: [255, 138, 61], B: [66, 182, 255], C: [181, 123, 255], D: [163, 230, 53], ink: '237,237,240', shade: '11,11,13',
-    bands: { low: [240, 62, 98], mid: [255, 178, 82], high: [238, 238, 246] } },
-  aloe: { light: true, A: [228, 87, 46], B: [28, 127, 196], C: [123, 79, 214], D: [77, 143, 16], ink: '18,48,28', shade: '251,254,251',
-    bands: { low: [208, 36, 72], mid: [226, 142, 30], high: [52, 60, 72] } },
-  mist: { light: true, A: [212, 98, 47], B: [47, 109, 176], C: [118, 86, 194], D: [79, 132, 32], ink: '30,37,45', shade: '231,233,236',
-    bands: { low: [196, 42, 76], mid: [212, 134, 34], high: [44, 52, 62] } },
-  cherry: { A: [255, 59, 92], B: [255, 163, 192], C: [201, 160, 255], D: [255, 209, 102], ink: '253,238,242', shade: '39,16,26',
+  aero: { A: [64, 170, 255], B: [110, 214, 70], C: [255, 170, 50], D: [170, 130, 255], ink: '232,248,255', shade: '4,16,30',
+    bands: { low: [0, 140, 255], mid: [80, 228, 170], high: [236, 252, 255] } },
+  meadow: { A: [120, 220, 80], B: [80, 180, 255], C: [255, 190, 60], D: [255, 120, 190], ink: '236,255,236', shade: '5,20,9',
+    bands: { low: [40, 190, 90], mid: [200, 240, 90], high: [250, 255, 240] } },
+  aurora: { A: [47, 214, 195], B: [167, 139, 250], C: [90, 169, 255], D: [163, 230, 53], ink: '230,251,255', shade: '2,8,16',
+    bands: { low: [124, 92, 255], mid: [45, 212, 191], high: [226, 255, 250] } },
+  chrome: { A: [255, 140, 40], B: [40, 200, 235], C: [170, 130, 255], D: [150, 220, 60], ink: '241,246,250', shade: '8,12,18',
+    bands: { low: [255, 122, 0], mid: [0, 190, 225], high: [246, 248, 252] } },
+  cherry: { A: [255, 59, 92], B: [255, 163, 192], C: [201, 160, 255], D: [255, 209, 102], ink: '253,238,242', shade: '14,3,6',
     bands: { low: [255, 59, 92], mid: [255, 196, 120], high: [255, 225, 235] } },
 };
 
 function setTheme(name) {
-  const t = THEMES[name] ? name : 'dark';
+  const t = THEMES[name] ? name : THEMES[OLD_THEMES[name]] ? OLD_THEMES[name] : 'aero';
   const { ink, shade, bands, light } = THEMES[t];
   document.body.dataset.theme = t;
   for (const n of DECKS) ACCENT[n] = THEMES[t][n];
@@ -66,10 +70,10 @@ function setTheme(name) {
   store.set('theme', t);
 }
 
-/** Font setting: Arial (default), Segoe UI, Playfair Display, Dancing Script, monospace. */
+/** Font setting: Aero (Istok Web, the default), Arial, Segoe UI, Playfair Display, Dancing Script, monospace. */
 function setFont(name) {
-  const f = ['arial', 'segoe', 'playfair', 'script', 'mono'].includes(name) ? name : 'arial';
-  if (f === 'arial') delete document.body.dataset.font;
+  const f = ['aero', 'arial', 'segoe', 'playfair', 'script', 'mono'].includes(name) ? name : 'aero';
+  if (f === 'aero') delete document.body.dataset.font;
   else document.body.dataset.font = f;
   pick($$('.font-card'), (b) => b.dataset.font === f);
   store.set('font', f);
@@ -209,7 +213,7 @@ export function setupSettings() {
       if (store.get('audioBuffer', 'balanced') === b.dataset.buffer) return;
       store.set('audioBuffer', b.dataset.buffer);
       showBuffer(b.dataset.buffer);
-      toast('Audio buffer saved. It applies the next time OpenDJ starts.');
+      toast('Audio buffer saved. It applies the next time OscarDJ starts.');
     }),
   );
 
@@ -268,7 +272,12 @@ export function setupSettings() {
   // Saved choices.
   store.remove('bg'); // an old background-picture setting (could be megabytes)
   setMv(store.get('musicVideos') !== 'off');
-  setFont(store.get('font', 'arial'));
+  // The first start with the Aero look takes its font; Arial was only ever the old default.
+  if (store.get('look') !== 'aero') {
+    store.set('look', 'aero');
+    if (store.get('font') === 'arial') store.remove('font');
+  }
+  setFont(store.get('font', 'aero'));
   setDeckCount(store.get('deckCount') === '4' ? 4 : 2);
-  setTheme(store.get('theme', 'dark'));
+  setTheme(store.get('theme', 'aero'));
 }

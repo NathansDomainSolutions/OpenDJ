@@ -12,7 +12,7 @@ export function renderHotcues(name) {
     const set = t?.cues?.[i] != null;
     btn.classList.toggle('set', set);
     btn.textContent = set ? `${i + 1} · ${fmtTime(t.cues[i], true)}` : String(i + 1); // the marker's spot in the track
-    btn.title = set ? `Hot cue ${i + 1} at ${fmtTime(t.cues[i], true)} (right-click to clear)` : `Set hot cue ${i + 1}`;
+    btn.title = (set ? `Hot cue ${i + 1} at ${fmtTime(t.cues[i], true)} (right-click to clear)` : `Set hot cue ${i + 1}`) + (btn.dataset.key ? ` [${btn.dataset.key}]` : '');
   });
 }
 

@@ -52,6 +52,13 @@ export function buildDeck(name) {
   $('.vinyl-label', root).textContent = name;
   ui[name] = d;
 
+  // Keyboard shortcuts in the tooltips (decks A and B have keys).
+  const keys = { A: { play: 'X', cue: 'Z', sync: 'C', back: 'Q', fwd: 'W', hc: '1234' }, B: { play: ',', cue: 'M', sync: '.', back: 'O', fwd: 'P', hc: '7890' } }[name];
+  if (keys) {
+    for (const [el, k] of [[d.play, keys.play], [d.cue, keys.cue], [d.sync, keys.sync], [$('.nudge-back', root), keys.back], [$('.nudge-fwd', root), keys.fwd]]) el.title += ` [${k}]`;
+    d.hotcues.forEach((b, i) => (b.dataset.key = keys.hc[i]));
+  }
+
   d.play.addEventListener('click', () => {
     togglePlay(name);
     markPlayed(name);
@@ -258,6 +265,7 @@ export function renderDeckState(name) {
   const deck = mixer.decks[name];
   const d = ui[name];
   d.play.classList.toggle('on', deck.playing);
+  d.root.classList.toggle('playing', deck.playing);
   d.play.textContent = deck.playing ? '❚❚' : '▶';
   const t = deck.track;
   d.root.classList.toggle('has-track', !!t);

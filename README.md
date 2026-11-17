@@ -12,7 +12,16 @@ A two- or four-deck DJ app for your own music and web tracks, with yt-dlp built 
 > order), with a details strip showing exactly what was searched and an **Expand** button for more room. The
 > search problems are written up in `docs/search-issues/`.
 
-## What's new (not yet released)
+## What's new in 0.4.0-beta
+
+### A new look: Frutiger Aero
+
+- **Glass, gloss and blue sky.** The whole app is redrawn in the Frutiger Aero / Y2K style: sky-and-grass wallpapers with bubbles and a lens flare, translucent glass panels, glossy gel buttons, chrome faders and knob caps, LED meters, and a round glass Play button in each deck's colour. Everything that shows the music (the waveforms, time and BPM, the overview, the video) sits on dark glass screens, so it reads the same in every theme.
+- **Five themes** (⚙ Settings → Theme): **Aero** (blue sky, the new default), **Meadow** (grass under a clear sky), **Aurora** (night glass under northern lights, the dark one), **Chrome** (Y2K silver with candy colours) and **Cherry Pop** (glossy cherry red). They replace Midnight, Aloe, Mist and Cherry; a saved Aloe or Mist choice carries over to Meadow or Chrome. The cherries stay.
+- **A Frutiger-style typeface**, Istok Web (SIL Open Font License), is the new default font; Arial and the others are still in Settings → Font.
+- **New app icon** to match (`scripts/make-icon.cjs` draws it).
+- Keyboard shortcuts now show in the buttons' tooltips, and **B** expands the library.
+- The look lives in `src/renderer/aero.css`; `styles.css` keeps the layout. `test/theme-shots.cjs` saves a screenshot of every theme to `out/shots/` without opening a window.
 
 ### Sync that syncs, and a smoother app
 

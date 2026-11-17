@@ -87,6 +87,9 @@ export function setupKeyboard() {
     } else if (e.key === '?') {
       $('#helpDialog').showModal();
       e.preventDefault();
+    } else if (k === 'b') {
+      $('#browseMax').click();
+      e.preventDefault();
     }
   });
   window.addEventListener('keyup', (e) => {
